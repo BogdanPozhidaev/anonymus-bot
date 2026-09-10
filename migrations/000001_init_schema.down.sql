@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS incoming_requests;
+DROP TABLE IF EXISTS messages;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_users_active_session;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS operators;
+DROP TABLE IF EXISTS users;
