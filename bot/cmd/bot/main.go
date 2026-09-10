@@ -48,8 +48,11 @@ func checkBackendHealth(backendURL string, logger *slog.Logger) {
 		logger.Error("backend health check failed", "error", err)
 		return
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Error("failed to close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode == http.StatusOK {
 		logger.Info("backend is healthy")
 	} else {
