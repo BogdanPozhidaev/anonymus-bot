@@ -1,61 +1,52 @@
 package main
 
 import (
-	"context"
 	"log/slog"
-	"net/http"
 	"os"
-	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
+	"github.com/fastcheck/anonymus_bot/bot/internal/config"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	if token == "" {
-		logger.Warn("TELEGRAM_BOT_TOKEN is not set, running in stub mode")
-	}
-
-	backendURL := os.Getenv("BACKEND_URL")
-	if backendURL == "" {
-		logger.Error("BACKEND_URL is not set")
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("bot service starting", "backend_url", backendURL)
-
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		checkBackendHealth(backendURL, logger)
-	}
-}
-
-func checkBackendHealth(backendURL string, logger *slog.Logger) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, backendURL+"/health", nil)
+	bot, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
 	if err != nil {
-		logger.Error("failed to create health check request", "error", err)
-		return
+		logger.Error("failed to create bot", "error", err)
+		os.Exit(1)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		logger.Error("backend health check failed", "error", err)
-		return
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			logger.Error("failed to close response body", "error", err)
+	logger.Info("bot authorized", "username", bot.Self.UserName)
+
+	updateConfig := tgbotapi.NewUpdate(0)
+	updateConfig.Timeout = 30
+
+	updates := bot.GetUpdatesChan(updateConfig)
+
+	logger.Info("bot started, listening for updates")
+
+	for update := range updates {
+		if update.Message == nil {
+			continue
 		}
-	}()
-	if resp.StatusCode == http.StatusOK {
-		logger.Info("backend is healthy")
-	} else {
-		logger.Warn("backend reported unhealthy", "status_code", resp.StatusCode)
+
+		logger.Info("received message",
+			"from_id", update.Message.From.ID,
+			"text", update.Message.Text,
+		)
+
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получено: "+update.Message.Text)
+		if _, err := bot.Send(msg); err != nil {
+			logger.Error("failed to send message", "error", err)
+		}
 	}
 }

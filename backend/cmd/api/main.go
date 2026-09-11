@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/api"
+	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
+	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -59,33 +62,25 @@ func main() {
 	logger.Info("connected to redis")
 
 	// HTTP сервер
+	encryptorKey, err := base64.StdEncoding.DecodeString(os.Getenv("PII_ENCRYPTION_KEY"))
+	if err != nil {
+		logger.Error("failed to decode PII_ENCRYPTION_KEY", "error", err)
+		os.Exit(1)
+	}
+	encryptor, err := crypto.NewEncryptor(encryptorKey)
+	if err != nil {
+		logger.Error("failed to create encryptor", "error", err)
+		os.Exit(1)
+	}
+
+	userRepo := repository.NewUserRepository(dbPool, encryptor)
+	sessionRepo := repository.NewSessionRepository(dbPool)
+	incomingRequestRepo := repository.NewIncomingRequestRepository(dbPool)
+
+	server := api.NewServer(dbPool, redisClient, userRepo, sessionRepo, incomingRequestRepo)
+
 	r := gin.Default()
-
-	r.GET("/health", func(c *gin.Context) {
-		healthCtx, healthCancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-		defer healthCancel()
-
-		dbStatus := "ok"
-		if err := dbPool.Ping(healthCtx); err != nil {
-			dbStatus = "error: " + err.Error()
-		}
-
-		redisStatus := "ok"
-		if err := redisClient.Ping(healthCtx).Err(); err != nil {
-			redisStatus = "error: " + err.Error()
-		}
-
-		overallStatus := http.StatusOK
-		if dbStatus != "ok" || redisStatus != "ok" {
-			overallStatus = http.StatusServiceUnavailable
-		}
-
-		c.JSON(overallStatus, gin.H{
-			"status":   "ok",
-			"postgres": dbStatus,
-			"redis":    redisStatus,
-		})
-	})
+	server.RegisterRoutes(r)
 
 	port := os.Getenv("BACKEND_PORT")
 	if port == "" {

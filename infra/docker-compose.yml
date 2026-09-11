@@ -40,6 +40,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       REDIS_URL: redis://redis:6379
+      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY}
     networks:
       - internal
 

@@ -186,3 +186,33 @@ func (r *SessionRepository) AssignOwner(ctx context.Context, sessionID, operator
 
 	return nil
 }
+
+func (r *SessionRepository) SetClientUser(ctx context.Context, sessionID, userID int64) error {
+	query := `UPDATE sessions SET client_user_id = $1 WHERE id = $2`
+
+	cmdTag, err := r.pool.Exec(ctx, query, userID, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to set client user: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *SessionRepository) SetExecutorUser(ctx context.Context, sessionID, userID int64) error {
+	query := `UPDATE sessions SET executor_user_id = $1 WHERE id = $2`
+
+	cmdTag, err := r.pool.Exec(ctx, query, userID, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to set executor user: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
