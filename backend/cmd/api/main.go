@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/db"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -26,17 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	dbPool, err := pgxpool.New(ctx, dbURL)
+	dbPool, err := db.NewPool(ctx, dbURL)
 	if err != nil {
-		logger.Error("failed to create postgres pool", "error", err)
+		logger.Error("failed to connect to postgres", "error", err)
 		os.Exit(1)
 	}
 	defer dbPool.Close()
-
-	if err := dbPool.Ping(ctx); err != nil {
-		logger.Error("failed to ping postgres", "error", err)
-		os.Exit(1)
-	}
 	logger.Info("connected to postgres")
 
 	// Подключение к Redis
