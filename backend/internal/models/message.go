@@ -14,6 +14,7 @@ type Message struct {
 	SentByOperator   bool      `db:"sent_by_operator"`
 	ImpersonatedRole *string   `db:"impersonated_role"`
 	CreatedAt        time.Time `db:"created_at"`
+	Delivered        bool      `db:"delivered"`
 }
 
 const (

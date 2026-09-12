@@ -20,9 +20,18 @@ type bindSessionRequest struct {
 }
 
 type bindSessionResponse struct {
-	SessionID   int64  `json:"session_id"`
-	SessionType string `json:"role"`
-	Title       string `json:"title"`
+	SessionID           int64                `json:"session_id"`
+	SessionType         string               `json:"role"`
+	Title               string               `json:"title"`
+	UndeliveredMessages []undeliveredMessage `json:"undelivered_messages,omitempty"`
+}
+
+type undeliveredMessage struct {
+	MessageID   int64  `json:"message_id"`
+	ContentType string `json:"content_type"`
+	Content     string `json:"content,omitempty"`
+	FileID      string `json:"file_id,omitempty"`
+	SenderLabel string `json:"sender_label"`
 }
 
 func (s *Server) handleBindSession(c *gin.Context) {
@@ -62,28 +71,84 @@ func (s *Server) handleBindSession(c *gin.Context) {
 		return
 	}
 
-	// Привязываем пользователя к сессии в правильной роли, только если ещё не привязан
 	if req.Role == "client" && session.ClientUserID == nil {
-		clientID := user.ID
-		session.ClientUserID = &clientID
 		if err := s.sessionRepo.SetClientUser(ctx, session.ID, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind client"})
 			return
 		}
+		session.ClientUserID = &user.ID
 	} else if req.Role == "executor" && session.ExecutorUserID == nil {
-		executorID := user.ID
-		session.ExecutorUserID = &executorID
 		if err := s.sessionRepo.SetExecutorUser(ctx, session.ID, user.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind executor"})
 			return
 		}
+		session.ExecutorUserID = &user.ID
+	}
+
+	undelivered, err := s.collectUndeliveredMessagesFor(ctx, session, user.ID)
+	if err != nil {
+		s.logger.Error("failed to collect undelivered messages", "error", err, "session_id", session.ID)
+		// Не блокируем сам bind из-за этой ошибки — привязка важнее, сообщения можно попробовать доставить позже.
 	}
 
 	c.JSON(http.StatusOK, bindSessionResponse{
-		SessionID:   session.ID,
-		SessionType: req.Role,
-		Title:       session.Title,
+		SessionID:           session.ID,
+		SessionType:         req.Role,
+		Title:               session.Title,
+		UndeliveredMessages: undelivered,
 	})
+}
+
+// collectUndeliveredMessagesFor находит недоставленные сообщения сессии, адресованные
+// только что подключившемуся пользователю (то есть отправленные противоположной стороной),
+// помечает их доставленными и возвращает для отправки ботом.
+func (s *Server) collectUndeliveredMessagesFor(ctx context.Context, session *models.Session, newlyBoundUserID int64) ([]undeliveredMessage, error) {
+	allUndelivered, err := s.messageRepo.ListUndelivered(ctx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(allUndelivered) == 0 {
+		return nil, nil
+	}
+
+	var result []undeliveredMessage
+	var deliveredIDs []int64
+
+	for _, m := range allUndelivered {
+		// Сообщение адресовано новому участнику, только если отправитель — НЕ он сам.
+		if m.SenderUserID != nil && *m.SenderUserID == newlyBoundUserID {
+			continue
+		}
+
+		label := "Клиент:"
+		if m.SenderRole == models.SenderRoleExecutor {
+			label = "Менеджер:"
+		}
+
+		item := undeliveredMessage{
+			MessageID:   m.ID,
+			ContentType: m.ContentType,
+			SenderLabel: label,
+		}
+		if m.Content != nil {
+			item.Content = *m.Content
+		}
+		if m.FileID != nil {
+			item.FileID = *m.FileID
+		}
+
+		result = append(result, item)
+		deliveredIDs = append(deliveredIDs, m.ID)
+	}
+
+	if len(deliveredIDs) > 0 {
+		if err := s.messageRepo.MarkDelivered(ctx, deliveredIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
 // getOrCreateUser ищет пользователя по telegram_id; если не найден — создаёт нового.

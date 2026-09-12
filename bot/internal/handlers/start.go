@@ -65,6 +65,18 @@ func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.
 
 	greeting := "Здравствуйте! Вы подключены к сессии в компании «Посредник». Ваши сообщения будут переданы менеджеру."
 	h.sendMessage(message.Chat.ID, greeting)
+
+	h.deliverPendingMessages(message.Chat.ID, resp.UndeliveredMessages)
+}
+
+func (h *StartHandler) deliverPendingMessages(chatID int64, messages []backendclient.UndeliveredMessage) {
+	for _, m := range messages {
+		text := m.SenderLabel + " " + m.Content
+		msg := tgbotapi.NewMessage(chatID, text)
+		if _, err := h.bot.Send(msg); err != nil {
+			h.logger.Error("failed to deliver pending message", "error", err, "message_id", m.MessageID, "chat_id", chatID)
+		}
+	}
 }
 
 func (h *StartHandler) handleWithoutPayload(ctx context.Context, message *tgbotapi.Message) {

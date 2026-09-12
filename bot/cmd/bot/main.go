@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -36,6 +35,7 @@ func main() {
 	helpHandler := handlers.NewHelpHandler(bot, logger)
 	languageHandler := handlers.NewLanguageHandler(bot, backend, logger)
 	operatorHandler := handlers.NewOperatorHandler(bot, backend, logger)
+	messageRelayHandler := handlers.NewMessageRelayHandler(bot, backend, logger)
 
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
@@ -47,13 +47,6 @@ func main() {
 	ctx := context.Background()
 
 	for update := range updates {
-		if update.CallbackQuery != nil {
-			if strings.HasPrefix(update.CallbackQuery.Data, "set_lang:") {
-				languageHandler.HandleCallback(ctx, update.CallbackQuery)
-			}
-			continue
-		}
-
 		if update.Message == nil {
 			continue
 		}
@@ -72,6 +65,11 @@ func main() {
 			continue
 		}
 
-		logger.Info("received non-command message", "chat_id", update.Message.Chat.ID)
+		if update.Message.Text != "" {
+			messageRelayHandler.HandleText(ctx, update.Message)
+			continue
+		}
+
+		logger.Info("received unsupported message type", "chat_id", update.Message.Chat.ID)
 	}
 }

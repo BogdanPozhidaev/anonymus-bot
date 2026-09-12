@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,27 +14,33 @@ import (
 type Server struct {
 	dbPool              *pgxpool.Pool
 	redisClient         *redis.Client
+	logger              *slog.Logger
 	userRepo            *repository.UserRepository
 	sessionRepo         *repository.SessionRepository
 	incomingRequestRepo *repository.IncomingRequestRepository
 	operatorRepo        *repository.OperatorRepository
+	messageRepo         *repository.MessageRepository
 }
 
 func NewServer(
 	dbPool *pgxpool.Pool,
 	redisClient *redis.Client,
+	logger *slog.Logger,
 	userRepo *repository.UserRepository,
 	sessionRepo *repository.SessionRepository,
 	incomingRequestRepo *repository.IncomingRequestRepository,
 	operatorRepo *repository.OperatorRepository,
+	messageRepo *repository.MessageRepository,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
 		redisClient:         redisClient,
+		logger:              logger,
 		userRepo:            userRepo,
 		sessionRepo:         sessionRepo,
 		incomingRequestRepo: incomingRequestRepo,
 		operatorRepo:        operatorRepo,
+		messageRepo:         messageRepo,
 	}
 }
 
@@ -55,5 +62,6 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.GET("/users/by-telegram/:telegramID", s.handleGetUserByTelegramID)
 		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
 		internal.GET("/operators/by-telegram/:telegramID", s.handleGetOperatorByTelegramID)
+		internal.POST("/messages/relay", s.handleRelayMessage)
 	}
 }

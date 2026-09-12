@@ -88,3 +88,63 @@ func (r *MessageRepository) ListBySessionID(ctx context.Context, sessionID int64
 
 	return messages, nil
 }
+
+func (r *MessageRepository) ListUndelivered(ctx context.Context, sessionID int64) ([]*models.Message, error) {
+	query := `
+		SELECT id, session_id, sender_user_id, sender_role, content_type,
+			content, file_id, internal_file_path, sent_by_operator, impersonated_role, delivered, created_at
+		FROM messages
+		WHERE session_id = $1 AND delivered = false
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.pool.Query(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list undelivered messages: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []*models.Message
+	for rows.Next() {
+		var m models.Message
+		err := rows.Scan(
+			&m.ID,
+			&m.SessionID,
+			&m.SenderUserID,
+			&m.SenderRole,
+			&m.ContentType,
+			&m.Content,
+			&m.FileID,
+			&m.InternalFilePath,
+			&m.SentByOperator,
+			&m.ImpersonatedRole,
+			&m.Delivered,
+			&m.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan message row: %w", err)
+		}
+		messages = append(messages, &m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating undelivered message rows: %w", err)
+	}
+
+	return messages, nil
+}
+
+func (r *MessageRepository) MarkDelivered(ctx context.Context, messageIDs []int64) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	query := `UPDATE messages SET delivered = true WHERE id = ANY($1)`
+
+	_, err := r.pool.Exec(ctx, query, messageIDs)
+	if err != nil {
+		return fmt.Errorf("failed to mark messages delivered: %w", err)
+	}
+
+	return nil
+}

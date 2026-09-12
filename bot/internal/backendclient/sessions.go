@@ -13,9 +13,18 @@ type BindSessionRequest struct {
 }
 
 type BindSessionResponse struct {
-	SessionID   int64  `json:"session_id"`
-	SessionType string `json:"role"`
-	Title       string `json:"title"`
+	SessionID           int64                `json:"session_id"`
+	SessionType         string               `json:"role"`
+	Title               string               `json:"title"`
+	UndeliveredMessages []UndeliveredMessage `json:"undelivered_messages,omitempty"`
+}
+
+type UndeliveredMessage struct {
+	MessageID   int64  `json:"message_id"`
+	ContentType string `json:"content_type"`
+	Content     string `json:"content,omitempty"`
+	FileID      string `json:"file_id,omitempty"`
+	SenderLabel string `json:"sender_label"`
 }
 
 func (c *Client) BindSession(ctx context.Context, sessionID int64, req BindSessionRequest) (*BindSessionResponse, error) {

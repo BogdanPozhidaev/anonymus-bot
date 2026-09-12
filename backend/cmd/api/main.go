@@ -78,7 +78,8 @@ func main() {
 	incomingRequestRepo := repository.NewIncomingRequestRepository(dbPool)
 
 	operatorRepo := repository.NewOperatorRepository(dbPool)
-	server := api.NewServer(dbPool, redisClient, userRepo, sessionRepo, incomingRequestRepo, operatorRepo)
+	messageRepo := repository.NewMessageRepository(dbPool)
+	server := api.NewServer(dbPool, redisClient, logger, userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo)
 	r := gin.Default()
 	server.RegisterRoutes(r)
 
