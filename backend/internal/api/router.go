@@ -16,6 +16,7 @@ type Server struct {
 	userRepo            *repository.UserRepository
 	sessionRepo         *repository.SessionRepository
 	incomingRequestRepo *repository.IncomingRequestRepository
+	operatorRepo        *repository.OperatorRepository
 }
 
 func NewServer(
@@ -24,6 +25,7 @@ func NewServer(
 	userRepo *repository.UserRepository,
 	sessionRepo *repository.SessionRepository,
 	incomingRequestRepo *repository.IncomingRequestRepository,
+	operatorRepo *repository.OperatorRepository,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
@@ -31,6 +33,7 @@ func NewServer(
 		userRepo:            userRepo,
 		sessionRepo:         sessionRepo,
 		incomingRequestRepo: incomingRequestRepo,
+		operatorRepo:        operatorRepo,
 	}
 }
 
@@ -50,5 +53,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.POST("/sessions/:id/bind", s.handleBindSession)
 		internal.POST("/incoming-requests", s.handleCreateIncomingRequest)
 		internal.GET("/users/by-telegram/:telegramID", s.handleGetUserByTelegramID)
+		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
+		internal.GET("/operators/by-telegram/:telegramID", s.handleGetOperatorByTelegramID)
 	}
 }
