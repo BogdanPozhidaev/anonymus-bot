@@ -10,6 +10,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/api"
 	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
+	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -79,7 +80,8 @@ func main() {
 
 	operatorRepo := repository.NewOperatorRepository(dbPool)
 	messageRepo := repository.NewMessageRepository(dbPool)
-	server := api.NewServer(dbPool, redisClient, logger, userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo)
+	moderationService := moderation.NewService(redisClient)
+	server := api.NewServer(dbPool, redisClient, logger, userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo, moderationService)
 	r := gin.Default()
 	server.RegisterRoutes(r)
 

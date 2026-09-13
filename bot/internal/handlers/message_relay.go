@@ -76,6 +76,8 @@ func (h *MessageRelayHandler) handleBlockedReason(chatID int64, reason string) {
 		text = "Сессия сейчас недоступна для отправки сообщений."
 	case "counterparty_not_bound_yet":
 		text = "Вторая сторона ещё не подключилась к сессии. Ваше сообщение будет доставлено, как только это произойдёт."
+	case "moderation_violation":
+		text = "Сообщение не отправлено: обмен личными контактами и прямые контакты в обход платформы запрещены правилами сервиса."
 	default:
 		text = "Сообщение не может быть доставлено."
 	}

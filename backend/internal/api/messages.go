@@ -83,6 +83,37 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		}, nil
 	}
 
+	// Модерация применяется только к тексту — для фото/голоса контентный
+	// анализ не выполняется в MVP (OCR намеренно исключён по решению ТЗ).
+	if req.ContentType == models.ContentTypeText && req.Content != "" {
+		modResult, err := s.moderationService.Check(ctx, sender.ID, req.Content)
+		if err != nil {
+			s.logger.Error("moderation check failed", "error", err, "user_id", sender.ID)
+			// Не блокируем сообщение из-за сбоя самой проверки — отказ
+			// модерации не должен парализовать всю переписку.
+		} else if modResult.Blocked {
+			s.logger.Warn("message blocked by moderation",
+				"user_id", sender.ID,
+				"session_id", session.ID,
+				"reason", modResult.Reason,
+				"violation_count", modResult.ViolationCount,
+			)
+
+			if modResult.ShouldPause {
+				if err := s.sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusPaused); err != nil {
+					s.logger.Error("failed to pause session after violations", "error", err, "session_id", session.ID)
+				} else {
+					s.logger.Warn("session auto-paused due to repeated violations", "session_id", session.ID, "violation_count", modResult.ViolationCount)
+				}
+			}
+
+			return &relayMessageResponse{
+				Blocked:     true,
+				BlockReason: "moderation_violation",
+			}, nil
+		}
+	}
+
 	message := &models.Message{
 		SessionID:    session.ID,
 		SenderUserID: &sender.ID,

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 )
 
@@ -20,6 +21,7 @@ type Server struct {
 	incomingRequestRepo *repository.IncomingRequestRepository
 	operatorRepo        *repository.OperatorRepository
 	messageRepo         *repository.MessageRepository
+	moderationService   *moderation.Service
 }
 
 func NewServer(
@@ -31,6 +33,7 @@ func NewServer(
 	incomingRequestRepo *repository.IncomingRequestRepository,
 	operatorRepo *repository.OperatorRepository,
 	messageRepo *repository.MessageRepository,
+	moderationService *moderation.Service,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
@@ -41,6 +44,7 @@ func NewServer(
 		incomingRequestRepo: incomingRequestRepo,
 		operatorRepo:        operatorRepo,
 		messageRepo:         messageRepo,
+		moderationService:   moderationService,
 	}
 }
 
