@@ -137,3 +137,48 @@ func (r *OperatorRepository) Update(ctx context.Context, o *models.Operator) err
 
 	return nil
 }
+
+func (r *OperatorRepository) ListAll(ctx context.Context) ([]*models.Operator, error) {
+	query := `
+		SELECT id, name, login, email, telegram_id, role, status,
+			password_hash, totp_secret, language, created_by, created_at, last_login_at
+		FROM operators
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list operators: %w", err)
+	}
+	defer rows.Close()
+
+	var operators []*models.Operator
+	for rows.Next() {
+		var o models.Operator
+		err := rows.Scan(
+			&o.ID,
+			&o.Name,
+			&o.Login,
+			&o.Email,
+			&o.TelegramID,
+			&o.Role,
+			&o.Status,
+			&o.PasswordHash,
+			&o.TOTPSecret,
+			&o.Language,
+			&o.CreatedBy,
+			&o.CreatedAt,
+			&o.LastLoginAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan operator row: %w", err)
+		}
+		operators = append(operators, &o)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating operator rows: %w", err)
+	}
+
+	return operators, nil
+}

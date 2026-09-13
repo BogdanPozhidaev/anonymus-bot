@@ -34,6 +34,21 @@ type undeliveredMessage struct {
 	SenderLabel string `json:"sender_label"`
 }
 
+type sessionListItem struct {
+	ID              int64  `json:"id"`
+	Title           string `json:"title"`
+	Status          string `json:"status"`
+	OwnerOperatorID *int64 `json:"owner_operator_id"`
+	ClientUserID    *int64 `json:"client_user_id"`
+	ExecutorUserID  *int64 `json:"executor_user_id"`
+	CreatedAt       string `json:"created_at"`
+}
+
+type createSessionRequest struct {
+	Title    string `json:"title" binding:"required"`
+	Language string `json:"language"`
+}
+
 func (s *Server) handleBindSession(c *gin.Context) {
 	sessionIDStr := c.Param("id")
 	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
@@ -178,4 +193,207 @@ func (s *Server) getOrCreateUser(ctx context.Context, telegramID int64, username
 	}
 
 	return newUser, nil
+}
+
+func (s *Server) handleListSessions(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	operatorID, _ := getOperatorID(c)
+	role, _ := getOperatorRole(c)
+
+	var sessions []*models.Session
+	var err error
+
+	if role == models.OperatorRoleAdmin {
+		sessions, err = s.sessionRepo.ListAll(ctx)
+	} else {
+		sessions, err = s.sessionRepo.ListByOperator(ctx, operatorID)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
+		return
+	}
+
+	items := make([]sessionListItem, 0, len(sessions))
+	for _, sess := range sessions {
+		items = append(items, sessionListItem{
+			ID:              sess.ID,
+			Title:           sess.Title,
+			Status:          sess.Status,
+			OwnerOperatorID: sess.OwnerOperatorID,
+			ClientUserID:    sess.ClientUserID,
+			ExecutorUserID:  sess.ExecutorUserID,
+			CreatedAt:       sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sessions": items})
+}
+
+func (s *Server) handleGetSession(c *gin.Context) {
+	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	if !s.canAccessSession(c, session) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	c.JSON(http.StatusOK, session)
+}
+
+// canAccessSession — единая проверка прав доступа к конкретной сессии:
+// admin видит всё, operator — только сессии, где он owner. Вынесена
+// отдельно, чтобы использовать во всех хендлерах, работающих с одной
+// сессией по ID, и не дублировать эту логику безопасности в каждом месте.
+func (s *Server) canAccessSession(c *gin.Context, session *models.Session) bool {
+	role, _ := getOperatorRole(c)
+	if role == models.OperatorRoleAdmin {
+		return true
+	}
+
+	operatorID, _ := getOperatorID(c)
+	return session.OwnerOperatorID != nil && *session.OwnerOperatorID == operatorID
+}
+
+func (s *Server) handleCreateSession(c *gin.Context) {
+	var req createSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	operatorID, _ := getOperatorID(c)
+
+	language := req.Language
+	if language == "" {
+		language = "ru"
+	}
+
+	session := &models.Session{
+		Title:     req.Title,
+		Status:    models.SessionStatusActive,
+		Language:  language,
+		CreatedBy: &operatorID,
+	}
+
+	ctx := c.Request.Context()
+	if err := s.sessionRepo.Create(ctx, session); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		return
+	}
+
+	// Создатель сразу становится владельцем сессии.
+	if err := s.sessionRepo.AssignOwner(ctx, session.ID, operatorID); err != nil {
+		s.logger.Error("failed to assign creator as owner", "error", err, "session_id", session.ID)
+	}
+
+	c.JSON(http.StatusCreated, session)
+}
+
+type updateSessionStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=active paused closed"`
+}
+
+func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
+	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+
+	var req updateSessionStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	if !s.canAccessSession(c, session) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	if err := s.sessionRepo.UpdateStatus(ctx, sessionID, req.Status); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
+		return
+	}
+
+	operatorID, _ := getOperatorID(c)
+	s.writeAuditLog(ctx, operatorID, "session_status_updated", "session", sessionID, gin.H{"new_status": req.Status})
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+type assignOwnerRequest struct {
+	OperatorID int64 `json:"operator_id" binding:"required"`
+}
+
+func (s *Server) handleAssignSessionOwner(c *gin.Context) {
+	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+
+	var req assignOwnerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	// Переназначение владельца — только admin, либо текущий владелец сессии.
+	if !s.canAccessSession(c, session) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	if err := s.sessionRepo.AssignOwner(ctx, sessionID, req.OperatorID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assign owner"})
+		return
+	}
+
+	operatorID, _ := getOperatorID(c)
+	s.writeAuditLog(ctx, operatorID, "session_owner_reassigned", "session", sessionID, gin.H{"new_owner_id": req.OperatorID})
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 )
@@ -21,7 +22,10 @@ type Server struct {
 	incomingRequestRepo *repository.IncomingRequestRepository
 	operatorRepo        *repository.OperatorRepository
 	messageRepo         *repository.MessageRepository
+	auditLogRepo        *repository.AuditLogRepository
 	moderationService   *moderation.Service
+	sessionService      *auth.SessionService
+	pendingAuthService  *auth.PendingAuthService
 }
 
 func NewServer(
@@ -33,7 +37,10 @@ func NewServer(
 	incomingRequestRepo *repository.IncomingRequestRepository,
 	operatorRepo *repository.OperatorRepository,
 	messageRepo *repository.MessageRepository,
+	auditLogRepo *repository.AuditLogRepository,
 	moderationService *moderation.Service,
+	sessionService *auth.SessionService,
+	pendingAuthService *auth.PendingAuthService,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
@@ -44,7 +51,10 @@ func NewServer(
 		incomingRequestRepo: incomingRequestRepo,
 		operatorRepo:        operatorRepo,
 		messageRepo:         messageRepo,
+		auditLogRepo:        auditLogRepo,
 		moderationService:   moderationService,
+		sessionService:      sessionService,
+		pendingAuthService:  pendingAuthService,
 	}
 }
 
@@ -67,5 +77,35 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
 		internal.GET("/operators/by-telegram/:telegramID", s.handleGetOperatorByTelegramID)
 		internal.POST("/messages/relay", s.handleRelayMessage)
+	}
+
+	apiGroup := r.Group("/api")
+	{
+		// Публичные эндпоинты аутентификации — без requireAuth
+		apiGroup.POST("/auth/login", s.handleLogin)
+		apiGroup.POST("/auth/totp/verify", s.handleVerifyTOTP)
+
+		// Всё остальное в /api требует валидной сессии
+		authenticated := apiGroup.Group("")
+		authenticated.Use(s.requireAuth())
+		{
+			authenticated.POST("/auth/logout", s.handleLogout)
+
+			authenticated.GET("/sessions", s.handleListSessions)
+			authenticated.GET("/sessions/:id", s.handleGetSession)
+			authenticated.POST("/sessions", s.handleCreateSession)
+			authenticated.PATCH("/sessions/:id/status", s.handleUpdateSessionStatus)
+			authenticated.PATCH("/sessions/:id/owner", s.handleAssignSessionOwner)
+
+			adminOnly := authenticated.Group("")
+			adminOnly.Use(s.requireAdmin())
+			{
+				adminOnly.GET("/operators", s.handleListOperators)
+				adminOnly.POST("/operators", s.handleCreateOperator)
+				adminOnly.PATCH("/operators/:id", s.handleUpdateOperator)
+			}
+
+			authenticated.GET("/audit-log", s.handleListAuditLog)
+		}
 	}
 }

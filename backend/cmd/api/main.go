@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/api"
+	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
 	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
@@ -81,7 +82,15 @@ func main() {
 	operatorRepo := repository.NewOperatorRepository(dbPool)
 	messageRepo := repository.NewMessageRepository(dbPool)
 	moderationService := moderation.NewService(redisClient)
-	server := api.NewServer(dbPool, redisClient, logger, userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo, moderationService)
+	sessionService := auth.NewSessionService(redisClient)
+	pendingAuthService := auth.NewPendingAuthService(redisClient)
+	auditLogRepo := repository.NewAuditLogRepository(dbPool)
+
+	server := api.NewServer(
+		dbPool, redisClient, logger,
+		userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo, auditLogRepo,
+		moderationService, sessionService, pendingAuthService,
+	)
 	r := gin.Default()
 	server.RegisterRoutes(r)
 
