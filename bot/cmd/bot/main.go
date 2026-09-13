@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -31,11 +32,12 @@ func main() {
 	logger.Info("bot authorized", "username", bot.Self.UserName)
 
 	backend := backendclient.New(cfg.BackendURL)
-	startHandler := handlers.NewStartHandler(bot, backend, logger)
+	startHandler := handlers.NewStartHandler(bot, backend, cfg.PhotosDir, logger)
 	helpHandler := handlers.NewHelpHandler(bot, logger)
 	languageHandler := handlers.NewLanguageHandler(bot, backend, logger)
 	operatorHandler := handlers.NewOperatorHandler(bot, backend, logger)
 	messageRelayHandler := handlers.NewMessageRelayHandler(bot, backend, logger)
+	photoHandler := handlers.NewPhotoHandler(bot, backend, cfg.PhotosDir, logger)
 
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
@@ -47,6 +49,18 @@ func main() {
 	ctx := context.Background()
 
 	for update := range updates {
+		if update.CallbackQuery != nil {
+			if strings.HasPrefix(update.CallbackQuery.Data, "set_lang:") {
+				languageHandler.HandleCallback(ctx, update.CallbackQuery)
+			} else {
+				callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
+				if _, err := bot.Request(callbackConfig); err != nil {
+					logger.Error("failed to answer callback", "error", err)
+				}
+			}
+			continue
+		}
+
 		if update.Message == nil {
 			continue
 		}
@@ -62,6 +76,11 @@ func main() {
 			case "operator":
 				operatorHandler.Handle(ctx, update.Message)
 			}
+			continue
+		}
+
+		if update.Message.Photo != nil {
+			photoHandler.Handle(ctx, update.Message)
 			continue
 		}
 

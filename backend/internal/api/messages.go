@@ -76,16 +76,11 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 	}
 
 	senderRole, recipientUserID, senderLabel := determineRoleAndRecipient(session, sender.ID)
-	if recipientUserID == nil {
+	if senderRole == "" {
 		return &relayMessageResponse{
 			Blocked:     true,
-			BlockReason: "counterparty_not_bound_yet",
+			BlockReason: "sender_not_in_session",
 		}, nil
-	}
-
-	recipient, err := s.userRepo.GetByID(ctx, *recipientUserID)
-	if err != nil {
-		return nil, err
 	}
 
 	message := &models.Message{
@@ -93,6 +88,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		SenderUserID: &sender.ID,
 		SenderRole:   senderRole,
 		ContentType:  req.ContentType,
+		Delivered:    recipientUserID != nil,
 	}
 	if req.Content != "" {
 		message.Content = &req.Content
@@ -102,6 +98,19 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 	}
 
 	if err := s.messageRepo.Create(ctx, message); err != nil {
+		return nil, err
+	}
+
+	if recipientUserID == nil {
+		return &relayMessageResponse{
+			Blocked:     true,
+			BlockReason: "counterparty_not_bound_yet",
+			MessageID:   message.ID,
+		}, nil
+	}
+
+	recipient, err := s.userRepo.GetByID(ctx, *recipientUserID)
+	if err != nil {
 		return nil, err
 	}
 

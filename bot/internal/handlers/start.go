@@ -4,20 +4,23 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
+	"github.com/fastcheck/anonymus_bot/bot/internal/imageproc"
 )
 
 type StartHandler struct {
-	bot     *tgbotapi.BotAPI
-	backend *backendclient.Client
-	logger  *slog.Logger
+	bot       *tgbotapi.BotAPI
+	backend   *backendclient.Client
+	logger    *slog.Logger
+	photosDir string
 }
 
-func NewStartHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, logger *slog.Logger) *StartHandler {
-	return &StartHandler{bot: bot, backend: backend, logger: logger}
+func NewStartHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, photosDir string, logger *slog.Logger) *StartHandler {
+	return &StartHandler{bot: bot, backend: backend, photosDir: photosDir, logger: logger}
 }
 
 func (h *StartHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
@@ -71,11 +74,38 @@ func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.
 
 func (h *StartHandler) deliverPendingMessages(chatID int64, messages []backendclient.UndeliveredMessage) {
 	for _, m := range messages {
-		text := m.SenderLabel + " " + m.Content
-		msg := tgbotapi.NewMessage(chatID, text)
-		if _, err := h.bot.Send(msg); err != nil {
-			h.logger.Error("failed to deliver pending message", "error", err, "message_id", m.MessageID, "chat_id", chatID)
+		switch m.ContentType {
+		case "text":
+			h.deliverPendingText(chatID, m)
+		case "photo":
+			h.deliverPendingPhoto(chatID, m)
+		default:
+			h.logger.Warn("unsupported pending message content type", "content_type", m.ContentType, "message_id", m.MessageID)
 		}
+	}
+}
+
+func (h *StartHandler) deliverPendingText(chatID int64, m backendclient.UndeliveredMessage) {
+	text := m.SenderLabel + " " + m.Content
+	msg := tgbotapi.NewMessage(chatID, text)
+	if _, err := h.bot.Send(msg); err != nil {
+		h.logger.Error("failed to deliver pending text message", "error", err, "message_id", m.MessageID, "chat_id", chatID)
+	}
+}
+
+func (h *StartHandler) deliverPendingPhoto(chatID int64, m backendclient.UndeliveredMessage) {
+	filePath := filepath.Join(h.photosDir, m.FileID+".jpg")
+
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(filePath))
+	photo.Caption = m.SenderLabel
+
+	if _, err := h.bot.Send(photo); err != nil {
+		h.logger.Error("failed to deliver pending photo", "error", err, "message_id", m.MessageID, "chat_id", chatID, "file_path", filePath)
+		return
+	}
+
+	if err := imageproc.RemoveFile(filePath); err != nil {
+		h.logger.Error("failed to remove delivered photo file", "error", err, "file_path", filePath)
 	}
 }
 

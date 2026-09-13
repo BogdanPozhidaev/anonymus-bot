@@ -56,6 +56,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BACKEND_URL: http://backend:8080
       REDIS_URL: redis://redis:6379
+      PHOTOS_DIR: /data/photos
+    volumes:
+      - bot_photos:/data/photos  
     networks:
       - internal
 
@@ -77,3 +80,4 @@ networks:
 
 volumes:
   postgres_data:
+  bot_photos:

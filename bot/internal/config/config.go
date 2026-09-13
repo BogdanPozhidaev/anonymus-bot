@@ -9,6 +9,7 @@ type Config struct {
 	TelegramBotToken string
 	BackendURL       string
 	RedisURL         string
+	PhotosDir        string
 }
 
 func Load() (*Config, error) {
@@ -16,6 +17,7 @@ func Load() (*Config, error) {
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		BackendURL:       os.Getenv("BACKEND_URL"),
 		RedisURL:         os.Getenv("REDIS_URL"),
+		PhotosDir:        os.Getenv("PHOTOS_DIR"),
 	}
 
 	if cfg.TelegramBotToken == "" {
@@ -26,6 +28,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.RedisURL == "" {
 		return nil, fmt.Errorf("REDIS_URL is not set")
+	}
+	if cfg.PhotosDir == "" {
+		return nil, fmt.Errorf("PHOTOS_DIR is not set")
 	}
 
 	return cfg, nil
