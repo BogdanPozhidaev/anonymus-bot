@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
-	"github.com/fastcheck/anonymus_bot/bot/internal/imageproc"
+	"github.com/fastcheck/anonymus_bot/bot/internal/fileutil"
 )
 
 type PhotoHandler struct {
@@ -45,12 +45,12 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 		return
 	}
 
-	stripErr := imageproc.StripMetadata(origPath, strippedPath)
+	stripErr := fileutil.StripMetadata(origPath, strippedPath)
 
 	// Оригинал с метаданными удаляется немедленно и безусловно,
 	// вне зависимости от результата — не оставляем файл с EXIF на диске
 	// даже при ошибке обработки.
-	if err := imageproc.RemoveFile(origPath); err != nil {
+	if err := fileutil.RemoveFile(origPath); err != nil {
 		h.logger.Error("failed to remove original photo", "error", err)
 	}
 
@@ -69,7 +69,7 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	resp, err := h.backend.RelayMessage(ctx, req)
 	if err != nil {
 		h.logger.Error("failed to relay photo message", "error", err, "chat_id", message.Chat.ID)
-		_ = imageproc.RemoveFile(strippedPath)
+		_ = fileutil.RemoveFile(strippedPath)
 		h.sendErrorNotice(message.Chat.ID)
 		return
 	}
@@ -78,7 +78,7 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 		h.logger.Info("photo message blocked", "reason", resp.BlockReason, "chat_id", message.Chat.ID)
 		// Сессия недоступна/не найдена — файл больше не понадобится.
 		if resp.BlockReason == "no_active_session" || resp.BlockReason == "session_not_active" || resp.BlockReason == "sender_not_in_session" {
-			_ = imageproc.RemoveFile(strippedPath)
+			_ = fileutil.RemoveFile(strippedPath)
 		}
 		// При "counterparty_not_bound_yet" файл сознательно НЕ удаляется —
 		// он понадобится для отложенной доставки при подключении второй стороны.
@@ -135,7 +135,7 @@ func (h *PhotoHandler) deliverPhoto(recipientTelegramID int64, senderLabel, file
 		return
 	}
 
-	if err := imageproc.RemoveFile(filePath); err != nil {
+	if err := fileutil.RemoveFile(filePath); err != nil {
 		h.logger.Error("failed to remove delivered photo file", "error", err, "file_path", filePath)
 	}
 }

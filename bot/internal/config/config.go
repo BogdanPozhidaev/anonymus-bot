@@ -10,6 +10,7 @@ type Config struct {
 	BackendURL       string
 	RedisURL         string
 	PhotosDir        string
+	VoiceDir         string
 }
 
 func Load() (*Config, error) {
@@ -18,6 +19,7 @@ func Load() (*Config, error) {
 		BackendURL:       os.Getenv("BACKEND_URL"),
 		RedisURL:         os.Getenv("REDIS_URL"),
 		PhotosDir:        os.Getenv("PHOTOS_DIR"),
+		VoiceDir:         os.Getenv("VOICE_DIR"),
 	}
 
 	if cfg.TelegramBotToken == "" {
@@ -32,6 +34,8 @@ func Load() (*Config, error) {
 	if cfg.PhotosDir == "" {
 		return nil, fmt.Errorf("PHOTOS_DIR is not set")
 	}
-
+	if cfg.VoiceDir == "" {
+		return nil, fmt.Errorf("VOICE_DIR is not set")
+	}
 	return cfg, nil
 }

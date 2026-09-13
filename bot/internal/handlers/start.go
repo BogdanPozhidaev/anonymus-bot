@@ -9,7 +9,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
-	"github.com/fastcheck/anonymus_bot/bot/internal/imageproc"
+	"github.com/fastcheck/anonymus_bot/bot/internal/fileutil"
 )
 
 type StartHandler struct {
@@ -17,10 +17,11 @@ type StartHandler struct {
 	backend   *backendclient.Client
 	logger    *slog.Logger
 	photosDir string
+	voiceDir  string
 }
 
-func NewStartHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, photosDir string, logger *slog.Logger) *StartHandler {
-	return &StartHandler{bot: bot, backend: backend, photosDir: photosDir, logger: logger}
+func NewStartHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, photosDir, voiceDir string, logger *slog.Logger) *StartHandler {
+	return &StartHandler{bot: bot, backend: backend, photosDir: photosDir, voiceDir: voiceDir, logger: logger}
 }
 
 func (h *StartHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
@@ -79,6 +80,8 @@ func (h *StartHandler) deliverPendingMessages(chatID int64, messages []backendcl
 			h.deliverPendingText(chatID, m)
 		case "photo":
 			h.deliverPendingPhoto(chatID, m)
+		case "voice":
+			h.deliverPendingVoice(chatID, m)
 		default:
 			h.logger.Warn("unsupported pending message content type", "content_type", m.ContentType, "message_id", m.MessageID)
 		}
@@ -104,7 +107,7 @@ func (h *StartHandler) deliverPendingPhoto(chatID int64, m backendclient.Undeliv
 		return
 	}
 
-	if err := imageproc.RemoveFile(filePath); err != nil {
+	if err := fileutil.RemoveFile(filePath); err != nil {
 		h.logger.Error("failed to remove delivered photo file", "error", err, "file_path", filePath)
 	}
 }
@@ -133,5 +136,21 @@ func (h *StartHandler) sendMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if _, err := h.bot.Send(msg); err != nil {
 		h.logger.Error("failed to send message", "error", err, "chat_id", chatID)
+	}
+}
+
+func (h *StartHandler) deliverPendingVoice(chatID int64, m backendclient.UndeliveredMessage) {
+	filePath := filepath.Join(h.voiceDir, m.FileID+".ogg")
+
+	voice := tgbotapi.NewVoice(chatID, tgbotapi.FilePath(filePath))
+	voice.Caption = m.SenderLabel
+
+	if _, err := h.bot.Send(voice); err != nil {
+		h.logger.Error("failed to deliver pending voice", "error", err, "message_id", m.MessageID, "chat_id", chatID, "file_path", filePath)
+		return
+	}
+
+	if err := fileutil.RemoveFile(filePath); err != nil {
+		h.logger.Error("failed to remove delivered voice file", "error", err, "file_path", filePath)
 	}
 }

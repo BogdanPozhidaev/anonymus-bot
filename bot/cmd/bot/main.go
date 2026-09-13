@@ -10,8 +10,11 @@ import (
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
 	"github.com/fastcheck/anonymus_bot/bot/internal/config"
+	"github.com/fastcheck/anonymus_bot/bot/internal/dispatcher"
 	"github.com/fastcheck/anonymus_bot/bot/internal/handlers"
 )
+
+const updateConcurrency = 10
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -32,23 +35,16 @@ func main() {
 	logger.Info("bot authorized", "username", bot.Self.UserName)
 
 	backend := backendclient.New(cfg.BackendURL)
-	startHandler := handlers.NewStartHandler(bot, backend, cfg.PhotosDir, logger)
+	startHandler := handlers.NewStartHandler(bot, backend, cfg.PhotosDir, cfg.VoiceDir, logger)
 	helpHandler := handlers.NewHelpHandler(bot, logger)
 	languageHandler := handlers.NewLanguageHandler(bot, backend, logger)
 	operatorHandler := handlers.NewOperatorHandler(bot, backend, logger)
 	messageRelayHandler := handlers.NewMessageRelayHandler(bot, backend, logger)
 	photoHandler := handlers.NewPhotoHandler(bot, backend, cfg.PhotosDir, logger)
+	voiceHandler := handlers.NewVoiceHandler(bot, backend, cfg.VoiceDir, logger)
+	blockedContentHandler := handlers.NewBlockedContentHandler(bot, logger)
 
-	updateConfig := tgbotapi.NewUpdate(0)
-	updateConfig.Timeout = 30
-
-	updates := bot.GetUpdatesChan(updateConfig)
-
-	logger.Info("bot started, listening for updates")
-
-	ctx := context.Background()
-
-	for update := range updates {
+	handleUpdate := func(ctx context.Context, update tgbotapi.Update) {
 		if update.CallbackQuery != nil {
 			if strings.HasPrefix(update.CallbackQuery.Data, "set_lang:") {
 				languageHandler.HandleCallback(ctx, update.CallbackQuery)
@@ -58,11 +54,11 @@ func main() {
 					logger.Error("failed to answer callback", "error", err)
 				}
 			}
-			continue
+			return
 		}
 
 		if update.Message == nil {
-			continue
+			return
 		}
 
 		if update.Message.IsCommand() {
@@ -76,19 +72,40 @@ func main() {
 			case "operator":
 				operatorHandler.Handle(ctx, update.Message)
 			}
-			continue
+			return
+		}
+
+		if blockedType := handlers.DetectBlockedType(update.Message); blockedType != "" {
+			blockedContentHandler.Handle(update.Message, blockedType)
+			return
 		}
 
 		if update.Message.Photo != nil {
 			photoHandler.Handle(ctx, update.Message)
-			continue
+			return
+		}
+
+		if update.Message.Voice != nil {
+			voiceHandler.Handle(ctx, update.Message)
+			return
 		}
 
 		if update.Message.Text != "" {
 			messageRelayHandler.HandleText(ctx, update.Message)
-			continue
+			return
 		}
 
 		logger.Info("received unsupported message type", "chat_id", update.Message.Chat.ID)
 	}
+
+	updateConfig := tgbotapi.NewUpdate(0)
+	updateConfig.Timeout = 30
+
+	updates := bot.GetUpdatesChan(updateConfig)
+
+	logger.Info("bot started, listening for updates", "concurrency", updateConcurrency)
+
+	ctx := context.Background()
+	d := dispatcher.New(handleUpdate, updateConcurrency, logger)
+	d.Run(ctx, updates)
 }

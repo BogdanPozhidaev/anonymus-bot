@@ -1,4 +1,4 @@
-package imageproc
+package fileutil
 
 import (
 	"fmt"
