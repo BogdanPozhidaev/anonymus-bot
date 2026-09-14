@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,7 +56,7 @@ func (r *SessionRepository) GetByID(ctx context.Context, id int64) (*models.Sess
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
 			client_display_name, executor_display_name, owner_operator_id,
 			status, language, close_requested_by, close_requested_at,
-			close_reason, payment_status, created_by, created_at
+			close_reason, closed_at, payment_status, created_by, created_at
 		FROM sessions
 		WHERE id = $1
 	`
@@ -75,6 +76,7 @@ func (r *SessionRepository) GetByID(ctx context.Context, id int64) (*models.Sess
 		&s.CloseRequestedBy,
 		&s.CloseRequestedAt,
 		&s.CloseReason,
+		&s.ClosedAt,
 		&s.PaymentStatus,
 		&s.CreatedBy,
 		&s.CreatedAt,
@@ -94,7 +96,7 @@ func (r *SessionRepository) ListByOperator(ctx context.Context, operatorID int64
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
 			client_display_name, executor_display_name, owner_operator_id,
 			status, language, close_requested_by, close_requested_at,
-			close_reason, payment_status, created_by, created_at
+			close_reason, closed_at, payment_status, created_by, created_at
 		FROM sessions
 		WHERE owner_operator_id = $1
 		ORDER BY created_at DESC
@@ -108,7 +110,7 @@ func (r *SessionRepository) ListAll(ctx context.Context) ([]*models.Session, err
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
 			client_display_name, executor_display_name, owner_operator_id,
 			status, language, close_requested_by, close_requested_at,
-			close_reason, payment_status, created_by, created_at
+			close_reason, closed_at, payment_status, created_by, created_at
 		FROM sessions
 		ORDER BY created_at DESC
 	`
@@ -140,6 +142,7 @@ func (r *SessionRepository) queryList(ctx context.Context, query string, args ..
 			&s.CloseRequestedBy,
 			&s.CloseRequestedAt,
 			&s.CloseReason,
+			&s.ClosedAt,
 			&s.PaymentStatus,
 			&s.CreatedBy,
 			&s.CreatedAt,
@@ -158,9 +161,18 @@ func (r *SessionRepository) queryList(ctx context.Context, query string, args ..
 }
 
 func (r *SessionRepository) UpdateStatus(ctx context.Context, id int64, status string) error {
-	query := `UPDATE sessions SET status = $1 WHERE id = $2`
+	var query string
+	var args []interface{}
 
-	cmdTag, err := r.pool.Exec(ctx, query, status, id)
+	if status == models.SessionStatusClosed {
+		query = `UPDATE sessions SET status = $1, closed_at = now() WHERE id = $2`
+		args = []interface{}{status, id}
+	} else {
+		query = `UPDATE sessions SET status = $1 WHERE id = $2`
+		args = []interface{}{status, id}
+	}
+
+	cmdTag, err := r.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update session status: %w", err)
 	}
@@ -222,7 +234,7 @@ func (r *SessionRepository) ListByParticipant(ctx context.Context, userID int64)
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
 			client_display_name, executor_display_name, owner_operator_id,
 			status, language, close_requested_by, close_requested_at,
-			close_reason, payment_status, created_by, created_at
+			close_reason, closed_at, payment_status, created_by, created_at
 		FROM sessions
 		WHERE (client_user_id = $1 OR executor_user_id = $1)
 			AND status != $2
@@ -245,4 +257,20 @@ func (r *SessionRepository) SetCloseRequestedBy(ctx context.Context, sessionID, 
 	}
 
 	return nil
+}
+
+// ListClosedBefore возвращает сессии, закрытые раньше указанного момента —
+// кандидаты для применения retention-политики.
+func (r *SessionRepository) ListClosedBefore(ctx context.Context, threshold time.Time) ([]*models.Session, error) {
+	query := `
+		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
+			client_display_name, executor_display_name, owner_operator_id,
+			status, language, close_requested_by, close_requested_at,
+			close_reason, closed_at, payment_status, created_by, created_at
+		FROM sessions
+		WHERE status = $1 AND closed_at IS NOT NULL AND closed_at < $2
+		ORDER BY closed_at ASC
+	`
+
+	return r.queryList(ctx, query, models.SessionStatusClosed, threshold)
 }

@@ -107,12 +107,10 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 					s.logger.Warn("session auto-paused due to repeated violations", "session_id", session.ID, "violation_count", modResult.ViolationCount)
 				}
 			}
+
 			return &relayMessageResponse{
-				Blocked:             false,
-				RecipientTelegramID: recipient.TelegramID,
-				SenderLabel:         senderLabel,
-				MessageID:           message.ID,
-				SessionID:           session.ID,
+				Blocked:     true,
+				BlockReason: "moderation_violation",
 			}, nil
 		}
 	}
@@ -140,6 +138,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 			Blocked:     true,
 			BlockReason: "counterparty_not_bound_yet",
 			MessageID:   message.ID,
+			SessionID:   session.ID,
 		}, nil
 	}
 
@@ -153,6 +152,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		RecipientTelegramID: recipient.TelegramID,
 		SenderLabel:         senderLabel,
 		MessageID:           message.ID,
+		SessionID:           session.ID,
 	}, nil
 }
 

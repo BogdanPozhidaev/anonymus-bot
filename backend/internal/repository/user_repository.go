@@ -219,3 +219,32 @@ func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targ
 
 	return nil
 }
+
+// AnonymizeUser необратимо стирает PII пользователя: username и first_name
+// обнуляются, telegram_id заменяется на гарантированно нерабочее отрицательное
+// значение (сохраняя NOT NULL/UNIQUE constraint, но делая невозможным сопоставление
+// с реальным Telegram-аккаунтом). Используется только retention-процессом.
+func (r *UserRepository) AnonymizeUser(ctx context.Context, userID int64) error {
+	// Отрицательный telegram_id, гарантированно уникальный и невалидный
+	// (реальные Telegram ID всегда положительны), формируется из ID записи
+	// с обратным знаком минус большая константа — исключает коллизии между
+	// анонимизированными пользователями.
+	anonymizedTelegramID := -(userID + 1_000_000_000_000)
+
+	query := `
+		UPDATE users
+		SET username = NULL, first_name = NULL, telegram_id = $1
+		WHERE id = $2
+	`
+
+	cmdTag, err := r.pool.Exec(ctx, query, anonymizedTelegramID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to anonymize user: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}

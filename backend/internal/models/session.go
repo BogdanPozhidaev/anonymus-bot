@@ -16,6 +16,7 @@ type Session struct {
 	CloseRequestedBy    *int64     `db:"close_requested_by"`
 	CloseRequestedAt    *time.Time `db:"close_requested_at"`
 	CloseReason         *string    `db:"close_reason"`
+	ClosedAt            *time.Time `db:"closed_at"`
 	PaymentStatus       *string    `db:"payment_status"`
 	CreatedBy           *int64     `db:"created_by"`
 	CreatedAt           time.Time  `db:"created_at"`
