@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -144,6 +145,80 @@ func (r *MessageRepository) MarkDelivered(ctx context.Context, messageIDs []int6
 	_, err := r.pool.Exec(ctx, query, messageIDs)
 	if err != nil {
 		return fmt.Errorf("failed to mark messages delivered: %w", err)
+	}
+
+	return nil
+}
+
+func (r *MessageRepository) DeleteBySessionID(ctx context.Context, sessionID int64) error {
+	query := `DELETE FROM messages WHERE session_id = $1`
+	_, err := r.pool.Exec(ctx, query, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete messages for session %d: %w", sessionID, err)
+	}
+	return nil
+}
+
+// ListForDeletion возвращает сообщения сессий, закрытых раньше threshold —
+// кандидаты на удаление согласно retention-политике (слой 2: сообщения/медиа).
+func (r *MessageRepository) ListForDeletion(ctx context.Context, threshold time.Time) ([]*models.Message, error) {
+	query := `
+		SELECT m.id, m.session_id, m.sender_user_id, m.sender_role, m.content_type,
+			m.content, m.file_id, m.internal_file_path, m.sent_by_operator,
+			m.impersonated_role, m.delivered, m.created_at
+		FROM messages m
+		INNER JOIN sessions s ON s.id = m.session_id
+		WHERE s.status = $1 AND s.closed_at IS NOT NULL AND s.closed_at < $2
+		ORDER BY m.id ASC
+	`
+
+	rows, err := r.pool.Query(ctx, query, models.SessionStatusClosed, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list messages for deletion: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []*models.Message
+	for rows.Next() {
+		var m models.Message
+		err := rows.Scan(
+			&m.ID,
+			&m.SessionID,
+			&m.SenderUserID,
+			&m.SenderRole,
+			&m.ContentType,
+			&m.Content,
+			&m.FileID,
+			&m.InternalFilePath,
+			&m.SentByOperator,
+			&m.ImpersonatedRole,
+			&m.Delivered,
+			&m.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan message row: %w", err)
+		}
+		messages = append(messages, &m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating message rows for deletion: %w", err)
+	}
+
+	return messages, nil
+}
+
+// DeleteByIDs необратимо удаляет записи сообщений по списку ID.
+func (r *MessageRepository) DeleteByIDs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	query := `DELETE FROM messages WHERE id = ANY($1)`
+
+	_, err := r.pool.Exec(ctx, query, ids)
+	if err != nil {
+		return fmt.Errorf("failed to delete messages: %w", err)
 	}
 
 	return nil

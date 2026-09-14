@@ -55,7 +55,8 @@ func TestPIIAnonymizer_Run_AnonymizesClosedSessionParticipants(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, config, logger)
+	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 
 	result, err := anonymizer.Run(ctx, false)
 	if err != nil {
@@ -113,8 +114,8 @@ func TestPIIAnonymizer_Run_DryRunDoesNotModifyData(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, config, logger)
-
+	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 	result, err := anonymizer.Run(ctx, true) // dry run
 	if err != nil {
 		t.Fatalf("anonymizer dry run failed: %v", err)
@@ -165,8 +166,8 @@ func TestPIIAnonymizer_Run_SkipsRecentlyClosedSessions(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, config, logger)
-
+	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 	result, err := anonymizer.Run(ctx, false)
 	if err != nil {
 		t.Fatalf("anonymizer run failed: %v", err)

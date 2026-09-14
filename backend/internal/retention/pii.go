@@ -14,6 +14,7 @@ type PIIAnonymizer struct {
 	sessionRepo  *repository.SessionRepository
 	userRepo     *repository.UserRepository
 	auditLogRepo *repository.AuditLogRepository
+	auditHasher  *AuditLogHasher
 	config       Config
 	logger       *slog.Logger
 }
@@ -22,6 +23,7 @@ func NewPIIAnonymizer(
 	sessionRepo *repository.SessionRepository,
 	userRepo *repository.UserRepository,
 	auditLogRepo *repository.AuditLogRepository,
+	auditHasher *AuditLogHasher,
 	config Config,
 	logger *slog.Logger,
 ) *PIIAnonymizer {
@@ -29,6 +31,7 @@ func NewPIIAnonymizer(
 		sessionRepo:  sessionRepo,
 		userRepo:     userRepo,
 		auditLogRepo: auditLogRepo,
+		auditHasher:  auditHasher,
 		config:       config,
 		logger:       logger,
 	}
@@ -83,6 +86,12 @@ func (a *PIIAnonymizer) Run(ctx context.Context, dryRun bool) (*PIIAnonymizeResu
 				a.logger.Error("failed to anonymize user", "error", err, "user_id", userID, "session_id", session.ID)
 				result.Errors = append(result.Errors, fmt.Errorf("session %d, user %d: %w", session.ID, userID, err))
 				continue
+			}
+
+			if err := a.auditHasher.HashPIIForUser(ctx, userID); err != nil {
+				a.logger.Error("failed to hash PII in audit log for user", "error", err, "user_id", userID)
+				// Не считаем это фатальной ошибкой всей операции — сам пользователь
+				// уже анонимизирован, хэширование audit log — дополнительная мера.
 			}
 
 			a.writeAnonymizationAuditLog(ctx, userID, session.ID)

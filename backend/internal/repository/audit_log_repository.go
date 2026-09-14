@@ -100,3 +100,14 @@ func (r *AuditLogRepository) List(ctx context.Context, filter AuditLogFilter) ([
 
 	return logs, nil
 }
+
+func (r *AuditLogRepository) UpdatePayload(ctx context.Context, id int64, payload []byte) error {
+	query := `UPDATE audit_log SET payload = $1 WHERE id = $2`
+
+	_, err := r.pool.Exec(ctx, query, payload, id)
+	if err != nil {
+		return fmt.Errorf("failed to update audit log payload: %w", err)
+	}
+
+	return nil
+}
