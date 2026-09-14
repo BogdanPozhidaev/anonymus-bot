@@ -24,6 +24,7 @@ type relayMessageResponse struct {
 	RecipientTelegramID int64  `json:"recipient_telegram_id,omitempty"`
 	SenderLabel         string `json:"sender_label,omitempty"`
 	MessageID           int64  `json:"message_id,omitempty"`
+	SessionID           int64  `json:"session_id,omitempty"`
 }
 
 func (s *Server) handleRelayMessage(c *gin.Context) {
@@ -106,10 +107,12 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 					s.logger.Warn("session auto-paused due to repeated violations", "session_id", session.ID, "violation_count", modResult.ViolationCount)
 				}
 			}
-
 			return &relayMessageResponse{
-				Blocked:     true,
-				BlockReason: "moderation_violation",
+				Blocked:             false,
+				RecipientTelegramID: recipient.TelegramID,
+				SenderLabel:         senderLabel,
+				MessageID:           message.ID,
+				SessionID:           session.ID,
 			}, nil
 		}
 	}

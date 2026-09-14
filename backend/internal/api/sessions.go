@@ -49,6 +49,18 @@ type createSessionRequest struct {
 	Language string `json:"language"`
 }
 
+type userSessionListItem struct {
+	SessionID int64  `json:"session_id"`
+	Title     string `json:"title"`
+	Role      string `json:"role"`
+	Status    string `json:"status"`
+	IsCurrent bool   `json:"is_current"`
+}
+
+type stopSessionRequest struct {
+	TelegramID int64 `json:"telegram_id" binding:"required"`
+}
+
 func (s *Server) handleBindSession(c *gin.Context) {
 	sessionIDStr := c.Param("id")
 	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
@@ -396,4 +408,186 @@ func (s *Server) handleAssignSessionOwner(c *gin.Context) {
 	s.writeAuditLog(ctx, operatorID, "session_owner_reassigned", "session", sessionID, gin.H{"new_owner_id": req.OperatorID})
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (s *Server) handleListSessionMessages(c *gin.Context) {
+	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	if !s.canAccessSession(c, session) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	messages, err := s.messageRepo.ListBySessionID(ctx, sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list messages"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"messages": messages})
+}
+
+func (s *Server) handleListUserSessions(c *gin.Context) {
+	telegramID, err := strconv.ParseInt(c.Param("telegramID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid telegram id"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	user, err := s.userRepo.GetByTelegramID(ctx, telegramID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	sessions, err := s.sessionRepo.ListByParticipant(ctx, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
+		return
+	}
+
+	items := make([]userSessionListItem, 0, len(sessions))
+	for _, sess := range sessions {
+		role := models.SenderRoleClient
+		if sess.ExecutorUserID != nil && *sess.ExecutorUserID == user.ID {
+			role = models.SenderRoleExecutor
+		}
+
+		items = append(items, userSessionListItem{
+			SessionID: sess.ID,
+			Title:     sess.Title,
+			Role:      role,
+			Status:    sess.Status,
+			IsCurrent: user.ActiveSessionID != nil && *user.ActiveSessionID == sess.ID,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sessions": items})
+}
+
+type switchActiveSessionRequest struct {
+	TargetSessionID int64 `json:"target_session_id" binding:"required"`
+}
+
+func (s *Server) handleSwitchActiveSession(c *gin.Context) {
+	telegramID, err := strconv.ParseInt(c.Param("telegramID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid telegram id"})
+		return
+	}
+
+	var req switchActiveSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	user, err := s.userRepo.GetByTelegramID(ctx, telegramID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	err = s.userRepo.SwitchActiveSessionTx(ctx, user.ID, req.TargetSessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotParticipant) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "not a participant of this session"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to switch session"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (s *Server) handleStopSession(c *gin.Context) {
+	var req stopSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	user, err := s.userRepo.GetByTelegramID(ctx, req.TelegramID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	if user.ActiveSessionID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no active session"})
+		return
+	}
+
+	session, err := s.sessionRepo.GetByID(ctx, *user.ActiveSessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	if err := s.sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusPendingClose); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update session status"})
+		return
+	}
+
+	if err := s.sessionRepo.SetCloseRequestedBy(ctx, session.ID, user.ID); err != nil {
+		s.logger.Error("failed to set close_requested_by", "error", err, "session_id", session.ID)
+	}
+
+	s.writeAuditLog(ctx, user.ID, "session_stop_requested", "session", session.ID, nil)
+
+	// Уведомляем вторую сторону нейтральным сообщением.
+	var counterpartUserID *int64
+	if session.ClientUserID != nil && *session.ClientUserID == user.ID {
+		counterpartUserID = session.ExecutorUserID
+	} else {
+		counterpartUserID = session.ClientUserID
+	}
+
+	var counterpartTelegramID int64
+	if counterpartUserID != nil {
+		counterpart, err := s.userRepo.GetByID(ctx, *counterpartUserID)
+		if err == nil {
+			counterpartTelegramID = counterpart.TelegramID
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"session_id":              session.ID,
+		"counterpart_telegram_id": counterpartTelegramID,
+	})
 }

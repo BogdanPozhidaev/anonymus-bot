@@ -170,3 +170,52 @@ func (r *UserRepository) SetActiveSession(ctx context.Context, userID, sessionID
 
 	return nil
 }
+
+// SwitchActiveSessionTx атомарно переключает активную сессию пользователя,
+// проверяя внутри транзакции, что пользователь реально является участником
+// целевой сессии (client_user_id или executor_user_id). Блокировка на строке
+// users предотвращает гонку, если несколько апдейтов от одного telegram_id
+// обрабатываются параллельно (см. риск-зону "переключение сессий").
+func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targetSessionID int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	// Блокируем строку пользователя на время операции — это сериализует
+	// конкурентные попытки изменить active_session_id для одного и того же userID.
+	var currentSessionID *int64
+	err = tx.QueryRow(ctx, `SELECT active_session_id FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&currentSessionID)
+	if err != nil {
+		return fmt.Errorf("failed to lock user row: %w", err)
+	}
+
+	var isParticipant bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM sessions
+			WHERE id = $1 AND (client_user_id = $2 OR executor_user_id = $2)
+		)
+	`, targetSessionID, userID).Scan(&isParticipant)
+	if err != nil {
+		return fmt.Errorf("failed to check session participation: %w", err)
+	}
+
+	if !isParticipant {
+		return ErrNotParticipant
+	}
+
+	_, err = tx.Exec(ctx, `UPDATE users SET active_session_id = $1 WHERE id = $2`, targetSessionID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update active session: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}

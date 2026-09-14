@@ -216,3 +216,33 @@ func (r *SessionRepository) SetExecutorUser(ctx context.Context, sessionID, user
 
 	return nil
 }
+
+func (r *SessionRepository) ListByParticipant(ctx context.Context, userID int64) ([]*models.Session, error) {
+	query := `
+		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
+			client_display_name, executor_display_name, owner_operator_id,
+			status, language, close_requested_by, close_requested_at,
+			close_reason, payment_status, created_by, created_at
+		FROM sessions
+		WHERE (client_user_id = $1 OR executor_user_id = $1)
+			AND status != $2
+		ORDER BY created_at DESC
+	`
+
+	return r.queryList(ctx, query, userID, models.SessionStatusClosed)
+}
+
+func (r *SessionRepository) SetCloseRequestedBy(ctx context.Context, sessionID, userID int64) error {
+	query := `UPDATE sessions SET close_requested_by = $1, close_requested_at = now() WHERE id = $2`
+
+	cmdTag, err := r.pool.Exec(ctx, query, userID, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to set close_requested_by: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}

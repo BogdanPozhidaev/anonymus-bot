@@ -65,7 +65,7 @@ func (h *VoiceHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	}
 
 	h.logger.Info("voice message relayed", "message_id", resp.MessageID, "chat_id", message.Chat.ID)
-	h.deliverVoice(resp.RecipientTelegramID, resp.SenderLabel, filePath)
+	h.deliverVoice(resp.RecipientTelegramID, resp.SenderLabel, filePath, resp.SessionID)
 }
 
 func (h *VoiceHandler) downloadTelegramFile(telegramFileID, destPath string) error {
@@ -103,10 +103,10 @@ func (h *VoiceHandler) downloadTelegramFile(telegramFileID, destPath string) err
 	return nil
 }
 
-func (h *VoiceHandler) deliverVoice(recipientTelegramID int64, senderLabel, filePath string) {
+func (h *VoiceHandler) deliverVoice(recipientTelegramID int64, senderLabel, filePath string, sessionID int64) {
 	voice := tgbotapi.NewVoice(recipientTelegramID, tgbotapi.FilePath(filePath))
 	voice.Caption = senderLabel
-	voice.ReplyMarkup = replyHereKeyboard()
+	voice.ReplyMarkup = replyHereKeyboard(sessionID)
 
 	if _, err := h.bot.Send(voice); err != nil {
 		h.logger.Error("failed to deliver voice to recipient", "error", err, "recipient_telegram_id", recipientTelegramID)

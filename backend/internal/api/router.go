@@ -77,6 +77,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
 		internal.GET("/operators/by-telegram/:telegramID", s.handleGetOperatorByTelegramID)
 		internal.POST("/messages/relay", s.handleRelayMessage)
+		internal.GET("/users/by-telegram/:telegramID/sessions", s.handleListUserSessions)
+		internal.PATCH("/users/by-telegram/:telegramID/active-session", s.handleSwitchActiveSession)
+		internal.POST("/sessions/stop", s.handleStopSession)
 	}
 
 	apiGroup := r.Group("/api")
@@ -96,6 +99,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			authenticated.POST("/sessions", s.handleCreateSession)
 			authenticated.PATCH("/sessions/:id/status", s.handleUpdateSessionStatus)
 			authenticated.PATCH("/sessions/:id/owner", s.handleAssignSessionOwner)
+			authenticated.GET("/sessions/:id/messages", s.handleListSessionMessages)
+			authenticated.GET("/incoming-requests", s.handleListIncomingRequests)
+			authenticated.PATCH("/incoming-requests/:id/status", s.handleUpdateIncomingRequestStatus)
 
 			adminOnly := authenticated.Group("")
 			adminOnly.Use(s.requireAdmin())

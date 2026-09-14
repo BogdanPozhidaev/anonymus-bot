@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -40,7 +41,7 @@ func (h *MessageRelayHandler) HandleText(ctx context.Context, message *tgbotapi.
 	}
 
 	h.logger.Info("message relayed", "message_id", resp.MessageID, "chat_id", message.Chat.ID)
-	h.deliverToRecipient(resp.RecipientTelegramID, resp.SenderLabel, message.Text)
+	h.deliverToRecipient(resp.RecipientTelegramID, resp.SenderLabel, message.Text, resp.SessionID)
 }
 
 // deliverToRecipient отправляет копию сообщения получателю от имени бота.
@@ -48,21 +49,22 @@ func (h *MessageRelayHandler) HandleText(ctx context.Context, message *tgbotapi.
 // отправителя. Telegram API не передаёт сюда никаких метаданных исходного сообщения
 // (from, forward_from, reply_to), потому что мы формируем совершенно новый message
 // через NewMessage, а не пересылаем существующий через Forward.
-func (h *MessageRelayHandler) deliverToRecipient(recipientTelegramID int64, senderLabel, text string) {
+func (h *MessageRelayHandler) deliverToRecipient(recipientTelegramID int64, senderLabel, text string, sessionID int64) {
 	fullText := senderLabel + " " + text
 
 	msg := tgbotapi.NewMessage(recipientTelegramID, fullText)
-	msg.ReplyMarkup = replyHereKeyboard()
+	msg.ReplyMarkup = replyHereKeyboard(sessionID)
 
 	if _, err := h.bot.Send(msg); err != nil {
 		h.logger.Error("failed to deliver message to recipient", "error", err, "recipient_telegram_id", recipientTelegramID)
 	}
 }
 
-func replyHereKeyboard() tgbotapi.InlineKeyboardMarkup {
+func replyHereKeyboard(sessionID int64) tgbotapi.InlineKeyboardMarkup {
+	callbackData := fmt.Sprintf("%s%d", switchSessionCallbackPrefix, sessionID)
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", "reply_here"),
+			tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", callbackData),
 		),
 	)
 }

@@ -43,12 +43,17 @@ func main() {
 	photoHandler := handlers.NewPhotoHandler(bot, backend, cfg.PhotosDir, logger)
 	voiceHandler := handlers.NewVoiceHandler(bot, backend, cfg.VoiceDir, logger)
 	blockedContentHandler := handlers.NewBlockedContentHandler(bot, logger)
+	sessionsListHandler := handlers.NewSessionsListHandler(bot, backend, logger)
+	stopHandler := handlers.NewStopHandler(bot, backend, logger)
 
 	handleUpdate := func(ctx context.Context, update tgbotapi.Update) {
 		if update.CallbackQuery != nil {
-			if strings.HasPrefix(update.CallbackQuery.Data, "set_lang:") {
+			switch {
+			case strings.HasPrefix(update.CallbackQuery.Data, "set_lang:"):
 				languageHandler.HandleCallback(ctx, update.CallbackQuery)
-			} else {
+			case strings.HasPrefix(update.CallbackQuery.Data, "switch_session:"):
+				sessionsListHandler.HandleSwitchCallback(ctx, update.CallbackQuery)
+			default:
 				callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
 				if _, err := bot.Request(callbackConfig); err != nil {
 					logger.Error("failed to answer callback", "error", err)
@@ -71,6 +76,12 @@ func main() {
 				languageHandler.HandleCommand(update.Message)
 			case "operator":
 				operatorHandler.Handle(ctx, update.Message)
+			case "sessions":
+				sessionsListHandler.HandleSessionsCommand(ctx, update.Message)
+			case "current":
+				sessionsListHandler.HandleCurrentCommand(ctx, update.Message)
+			case "stop":
+				stopHandler.Handle(ctx, update.Message)
 			}
 			return
 		}

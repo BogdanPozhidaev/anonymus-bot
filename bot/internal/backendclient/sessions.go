@@ -27,6 +27,11 @@ type UndeliveredMessage struct {
 	SenderLabel string `json:"sender_label"`
 }
 
+type StopSessionResponse struct {
+	SessionID             int64 `json:"session_id"`
+	CounterpartTelegramID int64 `json:"counterpart_telegram_id"`
+}
+
 func (c *Client) BindSession(ctx context.Context, sessionID int64, req BindSessionRequest) (*BindSessionResponse, error) {
 	var resp BindSessionResponse
 
@@ -35,5 +40,14 @@ func (c *Client) BindSession(ctx context.Context, sessionID int64, req BindSessi
 		return nil, err
 	}
 
+	return &resp, nil
+}
+
+func (c *Client) StopSession(ctx context.Context, telegramID int64) (*StopSessionResponse, error) {
+	var resp StopSessionResponse
+	err := c.doRequest(ctx, "POST", "/internal/sessions/stop", map[string]int64{"telegram_id": telegramID}, &resp)
+	if err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }

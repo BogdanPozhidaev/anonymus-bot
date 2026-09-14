@@ -15,6 +15,7 @@ type RelayMessageResponse struct {
 	RecipientTelegramID int64  `json:"recipient_telegram_id,omitempty"`
 	SenderLabel         string `json:"sender_label,omitempty"`
 	MessageID           int64  `json:"message_id,omitempty"`
+	SessionID           int64  `json:"session_id,omitempty"`
 }
 
 func (c *Client) RelayMessage(ctx context.Context, req RelayMessageRequest) (*RelayMessageResponse, error) {

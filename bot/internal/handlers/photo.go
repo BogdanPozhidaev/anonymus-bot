@@ -87,7 +87,7 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	}
 
 	h.logger.Info("photo message relayed", "message_id", resp.MessageID, "chat_id", message.Chat.ID)
-	h.deliverPhoto(resp.RecipientTelegramID, resp.SenderLabel, strippedPath)
+	h.deliverPhoto(resp.RecipientTelegramID, resp.SenderLabel, strippedPath, resp.SessionID)
 }
 
 func (h *PhotoHandler) downloadTelegramFile(telegramFileID, destPath string) error {
@@ -125,10 +125,10 @@ func (h *PhotoHandler) downloadTelegramFile(telegramFileID, destPath string) err
 	return nil
 }
 
-func (h *PhotoHandler) deliverPhoto(recipientTelegramID int64, senderLabel, filePath string) {
+func (h *PhotoHandler) deliverPhoto(recipientTelegramID int64, senderLabel, filePath string, sessionID int64) {
 	photo := tgbotapi.NewPhoto(recipientTelegramID, tgbotapi.FilePath(filePath))
 	photo.Caption = senderLabel
-	photo.ReplyMarkup = replyHereKeyboard()
+	photo.ReplyMarkup = replyHereKeyboard(sessionID)
 
 	if _, err := h.bot.Send(photo); err != nil {
 		h.logger.Error("failed to deliver photo to recipient", "error", err, "recipient_telegram_id", recipientTelegramID)
