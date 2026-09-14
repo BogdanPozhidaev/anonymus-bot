@@ -44,6 +44,7 @@ services:
       PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY}
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
+      BOT_INTERNAL_URL: http://bot:9090
     volumes:
       - bot_photos:/data/photos
       - bot_voice:/data/voice
@@ -64,6 +65,7 @@ services:
       REDIS_URL: redis://redis:6379
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
+      PANEL_BASE_URL: http://localhost
     volumes:
       - bot_photos:/data/photos  
       - bot_voice:/data/voice

@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 )
 
@@ -57,7 +60,31 @@ func (s *Server) handleCreateIncomingRequest(c *gin.Context) {
 		return
 	}
 
+	s.sendIncomingRequestAlert(c.Request.Context(), ir)
+
 	c.JSON(http.StatusCreated, gin.H{"id": ir.ID})
+}
+
+func (s *Server) sendIncomingRequestAlert(ctx context.Context, ir *models.IncomingRequest) {
+	name := "Без имени"
+	if ir.FirstName != nil {
+		name = *ir.FirstName
+	}
+
+	text := fmt.Sprintf("📩 Новое обращение от %s", name)
+	if ir.FirstMessageText != nil {
+		text += fmt.Sprintf("\n\"%s\"", *ir.FirstMessageText)
+	}
+
+	err := s.botClient.SendAlert(ctx, botclient.SendAlertRequest{
+		Text: text,
+		Buttons: []botclient.AlertButton{
+			{Label: "Взять в работу", CallbackData: fmt.Sprintf("take_request:%d", ir.ID)},
+		},
+	})
+	if err != nil {
+		s.logger.Error("failed to send incoming request alert", "error", err, "request_id", ir.ID)
+	}
 }
 
 func (s *Server) handleListIncomingRequests(c *gin.Context) {
@@ -116,4 +143,49 @@ func (s *Server) handleUpdateIncomingRequestStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (s *Server) handleMarkIncomingRequestProcessedInternal(c *gin.Context) {
+	requestID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request id"})
+		return
+	}
+
+	if err := s.incomingRequestRepo.UpdateStatus(c.Request.Context(), requestID, models.IncomingRequestStatusProcessed); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (s *Server) handleListIncomingRequestsInternal(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	requests, err := s.incomingRequestRepo.ListByStatus(ctx, models.IncomingRequestStatusNew)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list incoming requests"})
+		return
+	}
+
+	type item struct {
+		ID               int64  `json:"id"`
+		FirstName        string `json:"first_name"`
+		FirstMessageText string `json:"first_message_text"`
+	}
+
+	items := make([]item, 0, len(requests))
+	for _, r := range requests {
+		i := item{ID: r.ID}
+		if r.FirstName != nil {
+			i.FirstName = *r.FirstName
+		}
+		if r.FirstMessageText != nil {
+			i.FirstMessageText = *r.FirstMessageText
+		}
+		items = append(items, i)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"requests": items})
 }

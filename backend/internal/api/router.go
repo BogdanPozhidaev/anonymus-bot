@@ -9,6 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
+	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 )
@@ -26,6 +27,7 @@ type Server struct {
 	moderationService   *moderation.Service
 	sessionService      *auth.SessionService
 	pendingAuthService  *auth.PendingAuthService
+	botClient           *botclient.Client
 }
 
 func NewServer(
@@ -41,6 +43,7 @@ func NewServer(
 	moderationService *moderation.Service,
 	sessionService *auth.SessionService,
 	pendingAuthService *auth.PendingAuthService,
+	botClient *botclient.Client,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
@@ -80,6 +83,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.GET("/users/by-telegram/:telegramID/sessions", s.handleListUserSessions)
 		internal.PATCH("/users/by-telegram/:telegramID/active-session", s.handleSwitchActiveSession)
 		internal.POST("/sessions/stop", s.handleStopSession)
+		internal.POST("/incoming-requests/:id/mark-processed", s.handleMarkIncomingRequestProcessedInternal)
+		internal.GET("/operators/by-telegram/:telegramID/sessions", s.handleListOperatorSessionsInternal)
+		internal.GET("/incoming-requests", s.handleListIncomingRequestsInternal)
 	}
 
 	apiGroup := r.Group("/api")
@@ -102,6 +108,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			authenticated.GET("/sessions/:id/messages", s.handleListSessionMessages)
 			authenticated.GET("/incoming-requests", s.handleListIncomingRequests)
 			authenticated.PATCH("/incoming-requests/:id/status", s.handleUpdateIncomingRequestStatus)
+			authenticated.POST("/sessions/:id/send-as", s.handleSendMessageAsOperator)
 
 			adminOnly := authenticated.Group("")
 			adminOnly.Use(s.requireAdmin())

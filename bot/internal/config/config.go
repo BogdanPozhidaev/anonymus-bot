@@ -3,14 +3,17 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
-	TelegramBotToken string
-	BackendURL       string
-	RedisURL         string
-	PhotosDir        string
-	VoiceDir         string
+	TelegramBotToken    string
+	BackendURL          string
+	RedisURL            string
+	PhotosDir           string
+	VoiceDir            string
+	OperatorGroupChatID int64
+	PanelBaseURL        string
 }
 
 func Load() (*Config, error) {
@@ -37,5 +40,20 @@ func Load() (*Config, error) {
 	if cfg.VoiceDir == "" {
 		return nil, fmt.Errorf("VOICE_DIR is not set")
 	}
+
+	panelBaseStr := os.Getenv("PANEL_BASE_URL")
+	groupChatIDStr := os.Getenv("OPERATOR_GROUP_CHAT_ID")
+	if groupChatIDStr == "" {
+		return nil, fmt.Errorf("OPERATOR_GROUP_CHAT_ID is not set")
+	}
+	groupChatID, err := strconv.ParseInt(groupChatIDStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OPERATOR_GROUP_CHAT_ID: %w", err)
+	}
+	if panelBaseStr == "" {
+		return nil, fmt.Errorf("PANEL_BASE_URL is not set")
+	}
+	cfg.OperatorGroupChatID = groupChatID
+
 	return cfg, nil
 }

@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 )
@@ -586,8 +588,64 @@ func (s *Server) handleStopSession(c *gin.Context) {
 		}
 	}
 
+	s.sendStopRequestAlert(ctx, session)
+
 	c.JSON(http.StatusOK, gin.H{
 		"session_id":              session.ID,
 		"counterpart_telegram_id": counterpartTelegramID,
 	})
+}
+
+func (s *Server) sendStopRequestAlert(ctx context.Context, session *models.Session) {
+	text := fmt.Sprintf("🛑 Запрос на завершение сессии\n%s (#%d)", session.Title, session.ID)
+
+	err := s.botClient.SendAlert(ctx, botclient.SendAlertRequest{
+		Text: text,
+		Buttons: []botclient.AlertButton{
+			{Label: "Открыть в панели", CallbackData: fmt.Sprintf("open_session:%d", session.ID)},
+			{Label: "Закрыть сессию", CallbackData: fmt.Sprintf("close_session:%d", session.ID)},
+		},
+	})
+	if err != nil {
+		s.logger.Error("failed to send stop request alert", "error", err, "session_id", session.ID)
+	}
+}
+
+func (s *Server) handleListOperatorSessionsInternal(c *gin.Context) {
+	telegramID, err := strconv.ParseInt(c.Param("telegramID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid telegram id"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	operator, err := s.operatorRepo.GetByTelegramID(ctx, telegramID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "operator not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	sessions, err := s.sessionRepo.ListByOperator(ctx, operator.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
+		return
+	}
+
+	type item struct {
+		ID     int64  `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
+	}
+
+	items := make([]item, 0, len(sessions))
+	for _, sess := range sessions {
+		items = append(items, item{ID: sess.ID, Title: sess.Title, Status: sess.Status})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sessions": items})
 }

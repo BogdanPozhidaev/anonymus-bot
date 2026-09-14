@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/bot/internal/config"
 	"github.com/fastcheck/anonymus_bot/bot/internal/dispatcher"
 	"github.com/fastcheck/anonymus_bot/bot/internal/handlers"
+	"github.com/fastcheck/anonymus_bot/bot/internal/server"
 )
 
 const updateConcurrency = 10
@@ -45,6 +47,7 @@ func main() {
 	blockedContentHandler := handlers.NewBlockedContentHandler(bot, logger)
 	sessionsListHandler := handlers.NewSessionsListHandler(bot, backend, logger)
 	stopHandler := handlers.NewStopHandler(bot, backend, logger)
+	alertCallbackHandler := handlers.NewAlertCallbackHandler(bot, backend, cfg.PanelBaseURL, logger)
 
 	handleUpdate := func(ctx context.Context, update tgbotapi.Update) {
 		if update.CallbackQuery != nil {
@@ -53,6 +56,12 @@ func main() {
 				languageHandler.HandleCallback(ctx, update.CallbackQuery)
 			case strings.HasPrefix(update.CallbackQuery.Data, "switch_session:"):
 				sessionsListHandler.HandleSwitchCallback(ctx, update.CallbackQuery)
+			case strings.HasPrefix(update.CallbackQuery.Data, "open_session:"),
+				strings.HasPrefix(update.CallbackQuery.Data, "take_request:"),
+				strings.HasPrefix(update.CallbackQuery.Data, "close_session:"):
+				alertCallbackHandler.Handle(ctx, update.CallbackQuery)
+			case strings.HasPrefix(update.CallbackQuery.Data, "op_menu:"):
+				operatorHandler.HandleMenuCallback(ctx, update.CallbackQuery)
 			default:
 				callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
 				if _, err := bot.Request(callbackConfig); err != nil {
@@ -61,6 +70,13 @@ func main() {
 			}
 			return
 		}
+
+		internalServer := server.New(bot, cfg.OperatorGroupChatID, logger)
+		go func() {
+			if err := internalServer.Start(ctx, ":9090"); err != nil && err != http.ErrServerClosed {
+				logger.Error("internal server failed", "error", err)
+			}
+		}()
 
 		if update.Message == nil {
 			return

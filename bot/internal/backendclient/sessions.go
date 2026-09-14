@@ -32,6 +32,12 @@ type StopSessionResponse struct {
 	CounterpartTelegramID int64 `json:"counterpart_telegram_id"`
 }
 
+type OperatorSessionItem struct {
+	ID     int64  `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
 func (c *Client) BindSession(ctx context.Context, sessionID int64, req BindSessionRequest) (*BindSessionResponse, error) {
 	var resp BindSessionResponse
 
@@ -50,4 +56,15 @@ func (c *Client) StopSession(ctx context.Context, telegramID int64) (*StopSessio
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) ListOperatorSessions(ctx context.Context, telegramID int64) ([]OperatorSessionItem, error) {
+	var resp struct {
+		Sessions []OperatorSessionItem `json:"sessions"`
+	}
+	path := fmt.Sprintf("/internal/operators/by-telegram/%d/sessions", telegramID)
+	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Sessions, nil
 }

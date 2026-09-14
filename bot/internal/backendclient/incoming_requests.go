@@ -1,6 +1,9 @@
 package backendclient
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type CreateIncomingRequestRequest struct {
 	TelegramID       int64  `json:"telegram_id"`
@@ -14,6 +17,12 @@ type CreateIncomingRequestResponse struct {
 	ID int64 `json:"id"`
 }
 
+type IncomingRequestInternalItem struct {
+	ID               int64  `json:"id"`
+	FirstName        string `json:"first_name"`
+	FirstMessageText string `json:"first_message_text"`
+}
+
 func (c *Client) CreateIncomingRequest(ctx context.Context, req CreateIncomingRequestRequest) (*CreateIncomingRequestResponse, error) {
 	var resp CreateIncomingRequestResponse
 
@@ -22,4 +31,19 @@ func (c *Client) CreateIncomingRequest(ctx context.Context, req CreateIncomingRe
 	}
 
 	return &resp, nil
+}
+
+func (c *Client) ListIncomingRequestsInternal(ctx context.Context) ([]IncomingRequestInternalItem, error) {
+	var resp struct {
+		Requests []IncomingRequestInternalItem `json:"requests"`
+	}
+	if err := c.doRequest(ctx, "GET", "/internal/incoming-requests", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Requests, nil
+}
+
+func (c *Client) MarkIncomingRequestProcessed(ctx context.Context, requestID int64) error {
+	path := fmt.Sprintf("/internal/incoming-requests/%d/mark-processed", requestID)
+	return c.doRequest(ctx, "POST", path, nil, nil)
 }
