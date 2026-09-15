@@ -49,6 +49,15 @@ func main() {
 	stopHandler := handlers.NewStopHandler(bot, backend, logger)
 	alertCallbackHandler := handlers.NewAlertCallbackHandler(bot, backend, cfg.PanelBaseURL, logger)
 
+	ctx := context.Background()
+
+	internalServer := server.New(bot, cfg.OperatorGroupChatID, logger)
+	go func() {
+		if err := internalServer.Start(ctx, ":9090"); err != nil && err != http.ErrServerClosed {
+			logger.Error("internal server failed", "error", err)
+		}
+	}()
+
 	handleUpdate := func(ctx context.Context, update tgbotapi.Update) {
 		if update.CallbackQuery != nil {
 			switch {
@@ -70,13 +79,6 @@ func main() {
 			}
 			return
 		}
-
-		internalServer := server.New(bot, cfg.OperatorGroupChatID, logger)
-		go func() {
-			if err := internalServer.Start(ctx, ":9090"); err != nil && err != http.ErrServerClosed {
-				logger.Error("internal server failed", "error", err)
-			}
-		}()
 
 		if update.Message == nil {
 			return
@@ -132,7 +134,6 @@ func main() {
 
 	logger.Info("bot started, listening for updates", "concurrency", updateConcurrency)
 
-	ctx := context.Background()
 	d := dispatcher.New(handleUpdate, updateConcurrency, logger)
 	d.Run(ctx, updates)
 }
