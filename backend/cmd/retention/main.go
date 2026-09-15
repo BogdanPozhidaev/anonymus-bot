@@ -73,8 +73,11 @@ func main() {
 	auditLogRepo := repository.NewAuditLogRepository(pool)
 
 	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
-	config := retention.DefaultConfig()
-
+	config, err := retention.LoadConfig()
+	if err != nil {
+		logger.Error("failed to load retention config", "error", err)
+		os.Exit(1)
+	}
 	logger.Info("starting retention run", "dry_run", *dryRun)
 
 	piiAnonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)

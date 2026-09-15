@@ -44,6 +44,18 @@ func (s *Server) writeAuditLog(ctx context.Context, actorID int64, action, targe
 	}
 }
 
+// handleListAuditLog godoc
+// @Summary      Список записей аудита
+// @Description  Поддерживает фильтры и экспорт в CSV через ?format=csv
+// @Tags         audit
+// @Produce      json
+// @Security     BearerAuth
+// @Param        actor_id query int false "ID актора"
+// @Param        action query string false "Тип действия"
+// @Param        target_type query string false "Тип цели"
+// @Param        format query string false "json или csv"
+// @Success      200 {object} map[string]interface{}
+// @Router       /api/audit-log [get]
 func (s *Server) handleListAuditLog(c *gin.Context) {
 	var query listAuditLogQuery
 	if err := c.ShouldBindQuery(&query); err != nil {

@@ -1,0 +1,293 @@
+basePath: /
+definitions:
+  api.createSessionRequest:
+    properties:
+      language:
+        type: string
+      title:
+        type: string
+    required:
+    - title
+    type: object
+  api.loginRequest:
+    properties:
+      login:
+        type: string
+      password:
+        type: string
+    required:
+    - login
+    - password
+    type: object
+  api.loginResponse:
+    properties:
+      pending_token:
+        type: string
+      session_token:
+        type: string
+      status:
+        description: '"totp_required" | "totp_setup_required" | "ok"'
+        type: string
+      totp_qr_url:
+        type: string
+      totp_secret:
+        type: string
+    type: object
+  api.verifyTOTPRequest:
+    properties:
+      code:
+        type: string
+      pending_token:
+        type: string
+    required:
+    - code
+    - pending_token
+    type: object
+  api.verifyTOTPResponse:
+    properties:
+      operator_id:
+        type: integer
+      role:
+        type: string
+      session_token:
+        type: string
+    type: object
+  models.Session:
+    properties:
+      client_display_name:
+        type: string
+      client_user_id:
+        type: integer
+      close_reason:
+        type: string
+      close_requested_at:
+        type: string
+      close_requested_by:
+        type: integer
+      closed_at:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: integer
+      executor_display_name:
+        type: string
+      executor_user_id:
+        type: integer
+      id:
+        type: integer
+      language:
+        type: string
+      owner_operator_id:
+        type: integer
+      payment_status:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      user_visible_name:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    name: API Support
+  description: API для веб-панели и внутреннего общения bot↔backend
+  title: Anonymus Bot Backend API
+  version: "1.0"
+paths:
+  /api/audit-log:
+    get:
+      description: Поддерживает фильтры и экспорт в CSV через ?format=csv
+      parameters:
+      - description: ID актора
+        in: query
+        name: actor_id
+        type: integer
+      - description: Тип действия
+        in: query
+        name: action
+        type: string
+      - description: Тип цели
+        in: query
+        name: target_type
+        type: string
+      - description: json или csv
+        in: query
+        name: format
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Список записей аудита
+      tags:
+      - audit
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Первый шаг аутентификации — проверка логина/пароля
+      parameters:
+      - description: Логин и пароль
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.loginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loginResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Логин оператора
+      tags:
+      - auth
+  /api/auth/totp/verify:
+    post:
+      consumes:
+      - application/json
+      description: Второй шаг аутентификации — выдаёт session_token при успехе
+      parameters:
+      - description: Pending token и код
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.verifyTOTPRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.verifyTOTPResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Подтверждение TOTP-кода
+      tags:
+      - auth
+  /api/operators:
+    get:
+      description: Доступно только администраторам
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Список операторов
+      tags:
+      - operators
+  /api/sessions:
+    get:
+      description: Admin видит все сессии, operator — только свои
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Список сессий
+      tags:
+      - sessions
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Данные сессии
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.createSessionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Session'
+      security:
+      - BearerAuth: []
+      summary: Создать сессию
+      tags:
+      - sessions
+  /api/sessions/{id}:
+    get:
+      parameters:
+      - description: ID сессии
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Session'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Получить сессию по ID
+      tags:
+      - sessions
+securityDefinitions:
+  BearerAuth:
+    description: Введите "Bearer <ваш_session_token>"
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -12,6 +12,10 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
+	_ "github.com/fastcheck/anonymus_bot/backend/docs/swagger"
 )
 
 type Server struct {
@@ -28,6 +32,8 @@ type Server struct {
 	sessionService      *auth.SessionService
 	pendingAuthService  *auth.PendingAuthService
 	botClient           *botclient.Client
+	photosDir           string
+	voiceDir            string
 }
 
 func NewServer(
@@ -44,6 +50,8 @@ func NewServer(
 	sessionService *auth.SessionService,
 	pendingAuthService *auth.PendingAuthService,
 	botClient *botclient.Client,
+	photosDir string,
+	voiceDir string,
 ) *Server {
 	return &Server{
 		dbPool:              dbPool,
@@ -71,6 +79,7 @@ func (s *Server) pingRedis(ctx context.Context) error {
 
 func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/health", s.handleHealth)
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	internal := r.Group("/internal")
 	{
@@ -109,6 +118,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			authenticated.GET("/incoming-requests", s.handleListIncomingRequests)
 			authenticated.PATCH("/incoming-requests/:id/status", s.handleUpdateIncomingRequestStatus)
 			authenticated.POST("/sessions/:id/send-as", s.handleSendMessageAsOperator)
+			authenticated.GET("/messages/:id/media", s.handleGetMessageMedia)
 
 			adminOnly := authenticated.Group("")
 			adminOnly.Use(s.requireAdmin())

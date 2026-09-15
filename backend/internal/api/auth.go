@@ -35,6 +35,16 @@ type verifyTOTPResponse struct {
 	Role         string `json:"role"`
 }
 
+// handleLogin godoc
+// @Summary      Логин оператора
+// @Description  Первый шаг аутентификации — проверка логина/пароля
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request body loginRequest true "Логин и пароль"
+// @Success      200 {object} loginResponse
+// @Failure      401 {object} map[string]string
+// @Router       /api/auth/login [post]
 func (s *Server) handleLogin(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -106,6 +116,16 @@ func (s *Server) handleLogin(c *gin.Context) {
 	})
 }
 
+// handleVerifyTOTP godoc
+// @Summary      Подтверждение TOTP-кода
+// @Description  Второй шаг аутентификации — выдаёт session_token при успехе
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request body verifyTOTPRequest true "Pending token и код"
+// @Success      200 {object} verifyTOTPResponse
+// @Failure      401 {object} map[string]string
+// @Router       /api/auth/totp/verify [post]
 func (s *Server) handleVerifyTOTP(c *gin.Context) {
 	var req verifyTOTPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

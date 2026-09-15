@@ -72,6 +72,15 @@ func (s *Server) handleGetOperatorByTelegramID(c *gin.Context) {
 	})
 }
 
+// handleListOperators godoc
+// @Summary      Список операторов
+// @Description  Доступно только администраторам
+// @Tags         operators
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{}
+// @Failure      403 {object} map[string]string
+// @Router       /api/operators [get]
 func (s *Server) handleListOperators(c *gin.Context) {
 	ctx := c.Request.Context()
 

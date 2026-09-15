@@ -209,6 +209,15 @@ func (s *Server) getOrCreateUser(ctx context.Context, telegramID int64, username
 	return newUser, nil
 }
 
+// handleListSessions godoc
+// @Summary      Список сессий
+// @Description  Admin видит все сессии, operator — только свои
+// @Tags         sessions
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {object} map[string]interface{}
+// @Failure      401 {object} map[string]string
+// @Router       /api/sessions [get]
 func (s *Server) handleListSessions(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -245,6 +254,16 @@ func (s *Server) handleListSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"sessions": items})
 }
 
+// handleGetSession godoc
+// @Summary      Получить сессию по ID
+// @Tags         sessions
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path int true "ID сессии"
+// @Success      200 {object} models.Session
+// @Failure      403 {object} map[string]string
+// @Failure      404 {object} map[string]string
+// @Router       /api/sessions/{id} [get]
 func (s *Server) handleGetSession(c *gin.Context) {
 	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -286,6 +305,15 @@ func (s *Server) canAccessSession(c *gin.Context, session *models.Session) bool 
 	return session.OwnerOperatorID != nil && *session.OwnerOperatorID == operatorID
 }
 
+// handleCreateSession godoc
+// @Summary      Создать сессию
+// @Tags         sessions
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        request body createSessionRequest true "Данные сессии"
+// @Success      201 {object} models.Session
+// @Router       /api/sessions [post]
 func (s *Server) handleCreateSession(c *gin.Context) {
 	var req createSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

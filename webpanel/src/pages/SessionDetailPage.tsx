@@ -151,6 +151,57 @@ function DeeplinkRow({ label, link, connected }: { label: string; link: string; 
   );
 }
 
+import { useEffect, useState } from 'react';
+import { apiClient } from '../api/client';
+
+function MediaImage({ messageId }: { messageId: number }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    apiClient
+      .get(`/messages/${messageId}/media`, { responseType: 'blob' })
+      .then((res) => {
+        objectUrl = URL.createObjectURL(res.data);
+        setSrc(objectUrl);
+      })
+      .catch(() => setSrc(null));
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [messageId]);
+
+  if (!src) return <Text size="xs" c="dimmed">Загрузка фото…</Text>;
+
+  return <img src={src} alt="Фото" style={{ maxWidth: 250, borderRadius: 4, display: 'block' }} />;
+}
+
+function MediaAudio({ messageId }: { messageId: number }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    apiClient
+      .get(`/messages/${messageId}/media`, { responseType: 'blob' })
+      .then((res) => {
+        objectUrl = URL.createObjectURL(res.data);
+        setSrc(objectUrl);
+      })
+      .catch(() => setSrc(null));
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [messageId]);
+
+  if (!src) return <Text size="xs" c="dimmed">Загрузка аудио…</Text>;
+
+  return <audio controls src={src} style={{ maxWidth: 250 }} />;
+}
+
 function MessageRow({ message }: { message: import('../types/api').Message }) {
   const senderLabel = message.sender_role === 'client' ? 'Клиент' : 'Менеджер';
   const align = message.sender_role === 'client' ? 'flex-start' : 'flex-end';
@@ -162,8 +213,8 @@ function MessageRow({ message }: { message: import('../types/api').Message }) {
           {senderLabel}
         </Text>
         {message.content_type === 'text' && <Text size="sm">{message.content}</Text>}
-        {message.content_type === 'photo' && <Text size="sm" fs="italic">[Фото]</Text>}
-        {message.content_type === 'voice' && <Text size="sm" fs="italic">[Голосовое сообщение]</Text>}
+        {message.content_type === 'photo' && <MediaImage messageId={message.id} />}
+        {message.content_type === 'voice' && <MediaAudio messageId={message.id} />}
         <Text size="xs" c="dimmed" mt={4}>
           {new Date(message.created_at).toLocaleTimeString('ru-RU')}
           {!message.delivered && ' · не доставлено'}

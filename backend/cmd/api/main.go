@@ -18,6 +18,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// @title           Anonymus Bot Backend API
+// @version         1.0
+// @description     API для веб-панели и внутреннего общения bot↔backend
+// @contact.name    API Support
+// @host            localhost:8080
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Введите "Bearer <ваш_session_token>"
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -92,6 +102,7 @@ func main() {
 		dbPool, redisClient, logger,
 		userRepo, sessionRepo, incomingRequestRepo, operatorRepo, messageRepo, auditLogRepo,
 		moderationService, sessionService, pendingAuthService, botClient,
+		os.Getenv("PHOTOS_DIR"), os.Getenv("VOICE_DIR"),
 	)
 	r := gin.Default()
 	server.RegisterRoutes(r)

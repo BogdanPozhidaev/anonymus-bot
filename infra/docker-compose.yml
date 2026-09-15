@@ -91,6 +91,8 @@ services:
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
       RETENTION_RUN_HOUR: "03"
+      RETENTION_PII_MONTHS: ${RETENTION_PII_MONTHS:-3}
+      RETENTION_MESSAGE_MONTHS: ${RETENTION_MESSAGE_MONTHS:-12}
     volumes:
       - bot_photos:/data/photos
       - bot_voice:/data/voice

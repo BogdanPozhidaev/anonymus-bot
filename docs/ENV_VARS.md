@@ -11,5 +11,7 @@
 | `TELEGRAM_BOT_TOKEN` | Токен Telegram-бота от @BotFather | — (секрет) |
 | `PII_ENCRYPTION_KEY` | Ключ AES-256 для шифрования PII, base64, 32 байта | — (секрет, генерируется через `openssl rand -base64 32`) |
 | `RETENTION_RUN_HOUR` | Час запуска retention-джобы (0-23, UTC) | `03` |
+| `RETENTION_PII_MONTHS` | Через сколько месяцев после закрытия сессии анонимизируется PII | `3` |
+| `RETENTION_MESSAGE_MONTHS` | Через сколько месяцев после закрытия сессии удаляются сообщения/медиа | `12` |
 
 **Важно:** `.env` никогда не коммитится в git. Используй `.env.example` как шаблон.

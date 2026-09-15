@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
@@ -222,4 +224,38 @@ func (r *MessageRepository) DeleteByIDs(ctx context.Context, ids []int64) error 
 	}
 
 	return nil
+}
+
+func (r *MessageRepository) GetByID(ctx context.Context, id int64) (*models.Message, error) {
+	query := `
+		SELECT id, session_id, sender_user_id, sender_role, content_type,
+			content, file_id, internal_file_path, sent_by_operator,
+			impersonated_role, delivered, created_at
+		FROM messages
+		WHERE id = $1
+	`
+
+	var m models.Message
+	err := r.pool.QueryRow(ctx, query, id).Scan(
+		&m.ID,
+		&m.SessionID,
+		&m.SenderUserID,
+		&m.SenderRole,
+		&m.ContentType,
+		&m.Content,
+		&m.FileID,
+		&m.InternalFilePath,
+		&m.SentByOperator,
+		&m.ImpersonatedRole,
+		&m.Delivered,
+		&m.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get message by id: %w", err)
+	}
+
+	return &m, nil
 }
