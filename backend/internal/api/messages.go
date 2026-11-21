@@ -23,12 +23,10 @@ type relayMessageRequest struct {
 }
 
 type relayMessageResponse struct {
-	Blocked             bool   `json:"blocked"`
-	BlockReason         string `json:"block_reason,omitempty"`
-	RecipientTelegramID int64  `json:"recipient_telegram_id,omitempty"`
-	SenderLabel         string `json:"sender_label,omitempty"`
-	MessageID           int64  `json:"message_id,omitempty"`
-	SessionID           int64  `json:"session_id,omitempty"`
+	Blocked     bool   `json:"blocked"`
+	BlockReason string `json:"block_reason,omitempty"`
+	MessageID   int64  `json:"message_id,omitempty"`
+	SessionID   int64  `json:"session_id,omitempty"`
 }
 
 type sendAsOperatorRequest struct {
@@ -40,12 +38,16 @@ type sendAsOperatorRequest struct {
 func (s *Server) handleRelayMessage(c *gin.Context) {
 	var req relayMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
 	ctx := c.Request.Context()
 
+	if ((req.ContentType == models.ContentTypePhoto || req.ContentType == models.ContentTypeVoice) && !models.ValidMediaFileID(req.FileID)) || (req.ContentType == models.ContentTypeText && req.FileID != "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid media file id"})
+		return
+	}
 	resp, err := s.relayMessage(ctx, req)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -63,6 +65,9 @@ func (s *Server) handleRelayMessage(c *gin.Context) {
 // проверяет её статус, находит получателя (вторую сторону), сохраняет сообщение.
 func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*relayMessageResponse, error) {
 	sender, err := s.userRepo.GetByTelegramID(ctx, req.SenderTelegramID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return &relayMessageResponse{Blocked: true, BlockReason: "no_active_session"}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +91,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		}, nil
 	}
 
-	senderRole, recipientUserID, senderLabel := determineRoleAndRecipient(session, sender.ID)
+	senderRole, recipientUserID, _ := determineRoleAndRecipient(session, sender.ID)
 	if senderRole == "" {
 		return &relayMessageResponse{
 			Blocked:     true,
@@ -94,15 +99,14 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		}, nil
 	}
 
-	// Модерация применяется только к тексту — для фото/голоса контентный
-	// анализ не выполняется в MVP (OCR намеренно исключён по решению ТЗ).
-	if req.ContentType == models.ContentTypeText && req.Content != "" {
-		modResult, err := s.moderationService.Check(ctx, sender.ID, req.Content)
+	// Apply the same checks to media captions and ordinary text.
+	if req.Content != "" {
+		modResult, err := s.moderationService.Check(ctx, session.ID, "user", sender.ID, req.Content)
 		if err != nil {
 			s.logger.Error("moderation check failed", "error", err, "user_id", sender.ID)
-			// Не блокируем сообщение из-за сбоя самой проверки — отказ
-			// модерации не должен парализовать всю переписку.
-		} else if modResult.Blocked {
+			return &relayMessageResponse{Blocked: true, BlockReason: "moderation_unavailable"}, nil
+		}
+		if modResult.Blocked {
 			s.logger.Warn("message blocked by moderation",
 				"user_id", sender.ID,
 				"session_id", session.ID,
@@ -111,10 +115,13 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 			)
 
 			if modResult.ShouldPause {
-				if err := s.sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusPaused); err != nil {
+				changed, err := s.sessionRepo.TransitionStatus(ctx, session.ID, models.SessionStatusActive, models.SessionStatusPaused)
+				modResult.ShouldPause = changed
+				if err != nil {
 					s.logger.Error("failed to pause session after violations", "error", err, "session_id", session.ID)
-				} else {
+				} else if changed {
 					s.logger.Warn("session auto-paused due to repeated violations", "session_id", session.ID, "violation_count", modResult.ViolationCount)
+					s.notifySessionStatus(ctx, session, models.SessionStatusPaused)
 				}
 			}
 
@@ -132,7 +139,6 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		SenderUserID: &sender.ID,
 		SenderRole:   senderRole,
 		ContentType:  req.ContentType,
-		Delivered:    recipientUserID != nil,
 	}
 	if req.Content != "" {
 		message.Content = &req.Content
@@ -141,7 +147,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		message.FileID = &req.FileID
 	}
 
-	if err := s.messageRepo.Create(ctx, message); err != nil {
+	if err := s.messageRepo.Enqueue(ctx, message); err != nil {
 		return nil, err
 	}
 
@@ -154,18 +160,7 @@ func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*re
 		}, nil
 	}
 
-	recipient, err := s.userRepo.GetByID(ctx, *recipientUserID)
-	if err != nil {
-		return nil, err
-	}
-
-	return &relayMessageResponse{
-		Blocked:             false,
-		RecipientTelegramID: recipient.TelegramID,
-		SenderLabel:         senderLabel,
-		MessageID:           message.ID,
-		SessionID:           session.ID,
-	}, nil
+	return &relayMessageResponse{MessageID: message.ID, SessionID: session.ID}, nil
 }
 
 // determineRoleAndRecipient возвращает роль отправителя, ID пользователя-получателя
@@ -180,6 +175,20 @@ func determineRoleAndRecipient(session *models.Session, senderUserID int64) (rol
 	return "", nil, ""
 }
 
+// handleSendMessageAsOperator godoc
+// @Summary      Queue a text message on behalf of a session participant
+// @Tags         sessions
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path int true "Session ID"
+// @Param        request body sendAsOperatorRequest true "Text and sender role"
+// @Success      200 {object} map[string]interface{}
+// @Failure      400 {object} map[string]string
+// @Failure      403 {object} map[string]string
+// @Failure      413 {object} map[string]string
+// @Failure      503 {object} map[string]string
+// @Router       /api/sessions/{id}/send-as [post]
 func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -189,7 +198,7 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 
 	var req sendAsOperatorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -220,10 +229,13 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 	// Модерация применяется точно так же, как к обычным сообщениям —
 	// закрывает технический долг из Спринта 4: сообщения оператора
 	// в режиме active не должны обходить фильтры.
-	modResult, err := s.moderationService.Check(ctx, operatorID, req.Content)
+	modResult, err := s.moderationService.Check(ctx, session.ID, "operator", operatorID, req.Content)
 	if err != nil {
 		s.logger.Error("moderation check failed for operator message", "error", err, "operator_id", operatorID)
-	} else if modResult.Blocked {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "moderation unavailable; try again"})
+		return
+	}
+	if modResult.Blocked {
 		s.logger.Warn("operator message blocked by moderation",
 			"operator_id", operatorID,
 			"session_id", session.ID,
@@ -259,10 +271,9 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 		Content:          &req.Content,
 		SentByOperator:   true,
 		ImpersonatedRole: &impersonatedRole,
-		Delivered:        true,
 	}
 
-	if err := s.messageRepo.Create(ctx, message); err != nil {
+	if err := s.messageRepo.Enqueue(ctx, message); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create message"})
 		return
 	}
@@ -272,18 +283,7 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 		senderLabel = "Менеджер:"
 	}
 
-	if err := s.botClient.SendMessage(ctx, botclient.SendMessageRequest{
-		RecipientTelegramID: recipient.TelegramID,
-		SenderLabel:         senderLabel,
-		Text:                req.Content,
-		SessionID:           session.ID,
-	}); err != nil {
-		s.logger.Error("failed to deliver operator message via bot", "error", err, "message_id", message.ID)
-		// Сообщение уже сохранено в БД — не откатываем, просто логируем сбой доставки.
-		// Повторная доставка вручную возможна через реализацию отдельного механизма позже.
-	}
-
-	s.writeAuditLog(ctx, operatorID, "operator_sent_message_as", "session", session.ID, gin.H{
+	s.writeAuditLog(c, operatorID, "operator", "operator_sent_message_as", "session", session.ID, gin.H{
 		"impersonated_role": req.ImpersonatedRole,
 	})
 

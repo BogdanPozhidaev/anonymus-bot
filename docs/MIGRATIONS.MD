@@ -1,36 +1,29 @@
-# Работа с миграциями
+# Database migrations
 
-⚠️ На Windows нативный `migrate.exe` не подключается к Postgres в Docker по неясной причине (сетевая проблема). Используем Docker-контейнер вместо нативного бинарника.
+From the repository root, configure `infra/.env` using [the template](../infra/.env.example).
 
-## Предварительно
+```powershell
+docker compose -f infra/docker-compose.yml config --quiet
+docker compose -f infra/docker-compose.yml up -d --build backend
+docker compose -f infra/docker-compose.yml run --rm -T migrate migrate status
+```
 
-Postgres должен быть поднят с пробросом порта:
+The one-shot migration service must succeed before Compose starts the backend.
+The current schema reports `version=7 dirty=false`. Status only reads the
+database. An explicit upgrade uses the same service:
 
-\`\`\`powershell
-cd infra
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
-\`\`\`
+```powershell
+docker compose -f infra/docker-compose.yml run --rm --build -T migrate migrate up
+```
 
-Узнай имя Docker-сети:
-\`\`\`powershell
-docker network ls | findstr infra
-\`\`\`
+Reapplying the latest clean schema succeeds without changes. A dirty state
+requires inspection and a backup before repair. Migration 000006 marks
+existing databases with operator accounts as initialized.
 
-## Применить миграции
+Migration 000007 adds the delivery outbox. Upgrade backend and bot together
+after applying it. Avoid mixing older bots that send directly with a backend
+that delivers via the outbox. Existing messages are kept and classified as
+unverified history. They are not enqueued for automatic replay.
 
-\`\`\`powershell
-cd C:\anonymus_bot
-docker run --rm -v "${PWD}/migrations:/migrations" --network infra_default migrate/migrate -path=/migrations/ -database "postgres://app_user:<пароль_из_.env>@postgres:5432/mediator_bot?sslmode=disable" up
-\`\`\`
-
-## Откатить миграции
-
-Замени `up` на `down -all` в команде выше.
-
-## Создать новую миграцию
-
-\`\`\`powershell
-migrate create -ext sql -dir migrations -seq <название_миграции>
-\`\`\`
-
-(эта команда работает локально нормально, без Docker — проблема была только в подключении к БД)
+For the local Vite panel, include both `-f infra/docker-compose.yml` and
+`-f infra/docker-compose.dev.yml` to publish backend to loopback.

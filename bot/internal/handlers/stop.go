@@ -22,7 +22,7 @@ func NewStopHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, logger 
 func (h *StopHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	resp, err := h.backend.StopSession(ctx, message.From.ID)
 	if err != nil {
-		h.logger.Error("failed to stop session", "error", err, "chat_id", message.Chat.ID)
+		h.logger.Error("failed to stop session", "error", err)
 		h.sendMessage(message.Chat.ID, "У вас нет активной сессии для завершения.")
 		return
 	}
@@ -37,6 +37,6 @@ func (h *StopHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 func (h *StopHandler) sendMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to send message", "error", err, "chat_id", chatID)
+		h.logger.Error("failed to send message")
 	}
 }

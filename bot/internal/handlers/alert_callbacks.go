@@ -20,7 +20,7 @@ type AlertCallbackHandler struct {
 }
 
 func NewAlertCallbackHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, panelBaseURL string, logger *slog.Logger) *AlertCallbackHandler {
-	return &AlertCallbackHandler{bot: bot, backend: backend, panelBaseURL: panelBaseURL, logger: logger}
+	return &AlertCallbackHandler{bot: bot, backend: backend, panelBaseURL: strings.TrimRight(panelBaseURL, "/"), logger: logger}
 }
 
 func (h *AlertCallbackHandler) Handle(ctx context.Context, callback *tgbotapi.CallbackQuery) {
@@ -60,7 +60,7 @@ func (h *AlertCallbackHandler) handleTakeRequest(ctx context.Context, callback *
 
 	edit := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, callback.Message.MessageID, callback.Message.Text+"\n\n✅ Взято в работу")
 	if _, err := h.bot.Send(edit); err != nil {
-		h.logger.Error("failed to edit alert message", "error", err)
+		h.logger.Error("failed to edit alert message")
 	}
 }
 
@@ -73,6 +73,6 @@ func (h *AlertCallbackHandler) handleCloseSessionHint(callback *tgbotapi.Callbac
 func (h *AlertCallbackHandler) answerCallback(callbackID, text string) {
 	callbackConfig := tgbotapi.NewCallback(callbackID, text)
 	if _, err := h.bot.Request(callbackConfig); err != nil {
-		h.logger.Error("failed to answer callback", "error", err)
+		h.logger.Error("failed to answer callback")
 	}
 }

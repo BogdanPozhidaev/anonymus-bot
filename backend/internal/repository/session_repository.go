@@ -118,6 +118,21 @@ func (r *SessionRepository) ListAll(ctx context.Context) ([]*models.Session, err
 	return r.queryList(ctx, query)
 }
 
+func (r *SessionRepository) ListPanelPage(ctx context.Context, ownerID *int64, status, query string, limit, offset int) ([]*models.Session, error) {
+	return r.queryList(ctx, `
+		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
+			client_display_name, executor_display_name, owner_operator_id,
+			status, language, close_requested_by, close_requested_at,
+			close_reason, closed_at, payment_status, created_by, created_at
+		FROM sessions
+		WHERE ($1::bigint IS NULL OR owner_operator_id=$1)
+			AND ($2='' OR status=$2)
+			AND ($3='' OR strpos(lower(title), lower($3)) > 0 OR id::text=$3)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $4 OFFSET $5
+	`, ownerID, status, query, limit, offset)
+}
+
 func (r *SessionRepository) queryList(ctx context.Context, query string, args ...interface{}) ([]*models.Session, error) {
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -184,6 +199,17 @@ func (r *SessionRepository) UpdateStatus(ctx context.Context, id int64, status s
 	return nil
 }
 
+func (r *SessionRepository) TransitionStatus(ctx context.Context, id int64, previous, next string) (bool, error) {
+	result, err := r.pool.Exec(ctx, `
+		UPDATE sessions SET status = $3, closed_at = CASE WHEN $3 = 'closed' THEN now() ELSE closed_at END
+		WHERE id = $1 AND status = $2
+	`, id, previous, next)
+	if err != nil {
+		return false, fmt.Errorf("failed to transition session status: %w", err)
+	}
+	return result.RowsAffected() == 1, nil
+}
+
 func (r *SessionRepository) AssignOwner(ctx context.Context, sessionID, operatorID int64) error {
 	query := `UPDATE sessions SET owner_operator_id = $1 WHERE id = $2`
 
@@ -230,6 +256,14 @@ func (r *SessionRepository) SetExecutorUser(ctx context.Context, sessionID, user
 }
 
 func (r *SessionRepository) ListByParticipant(ctx context.Context, userID int64) ([]*models.Session, error) {
+	return r.listByParticipant(ctx, userID, nil, nil, 0)
+}
+
+func (r *SessionRepository) ListByParticipantPage(ctx context.Context, userID int64, current *int64, limit, offset int) ([]*models.Session, error) {
+	return r.listByParticipant(ctx, userID, current, &limit, offset)
+}
+
+func (r *SessionRepository) listByParticipant(ctx context.Context, userID int64, current *int64, limit *int, offset int) ([]*models.Session, error) {
 	query := `
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,
 			client_display_name, executor_display_name, owner_operator_id,
@@ -238,10 +272,10 @@ func (r *SessionRepository) ListByParticipant(ctx context.Context, userID int64)
 		FROM sessions
 		WHERE (client_user_id = $1 OR executor_user_id = $1)
 			AND status != $2
-		ORDER BY created_at DESC
+		ORDER BY (id = $3) DESC NULLS LAST, created_at DESC, id DESC LIMIT $4 OFFSET $5
 	`
 
-	return r.queryList(ctx, query, userID, models.SessionStatusClosed)
+	return r.queryList(ctx, query, userID, models.SessionStatusClosed, current, limit, offset)
 }
 
 func (r *SessionRepository) SetCloseRequestedBy(ctx context.Context, sessionID, userID int64) error {

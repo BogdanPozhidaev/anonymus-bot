@@ -3,16 +3,21 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
 type SessionData struct {
-	OperatorID int64  `json:"operator_id"`
-	Role       string `json:"role"`
+	AuthVersion int64  `json:"auth_version"`
+	OperatorID  int64  `json:"operator_id"`
+	Role        string `json:"role"`
 }
 
 type SessionService struct {
@@ -23,6 +28,7 @@ type SessionService struct {
 type PendingAuthService struct {
 	redisClient *redis.Client
 	ttl         time.Duration
+	secrets     *crypto.Encryptor
 }
 
 func NewSessionService(redisClient *redis.Client) *SessionService {
@@ -98,7 +104,7 @@ func (s *SessionService) RevokeAllForOperator(ctx context.Context, operatorID in
 
 	for _, token := range tokens {
 		if err := s.Revoke(ctx, token); err != nil {
-			return fmt.Errorf("failed to revoke session %s: %w", token, err)
+			return fmt.Errorf("failed to revoke operator session: %w", err)
 		}
 	}
 
@@ -113,40 +119,103 @@ func operatorSessionsIndexKey(operatorID int64) string {
 	return fmt.Sprintf("operator_sessions:%d", operatorID)
 }
 
-func NewPendingAuthService(redisClient *redis.Client) *PendingAuthService {
+func NewPendingAuthService(redisClient *redis.Client, secrets *crypto.Encryptor) *PendingAuthService {
 	return &PendingAuthService{
 		redisClient: redisClient,
 		ttl:         5 * time.Minute,
+		secrets:     secrets,
 	}
 }
 
-func (s *PendingAuthService) CreatePending(ctx context.Context, operatorID int64) (string, error) {
+const totpSecretPrefix = "totp:v1:"
+
+func (s *PendingAuthService) EncodeTOTP(secret string) (string, error) {
+	if s.secrets == nil {
+		return "", errors.New("TOTP encryption unavailable")
+	}
+	encoded, err := s.secrets.Encrypt(secret)
+	return totpSecretPrefix + encoded, err
+}
+
+func (s *PendingAuthService) DecodeTOTP(encoded string) (secret string, legacy bool, err error) {
+	if !strings.HasPrefix(encoded, totpSecretPrefix) {
+		return encoded, true, nil
+	}
+	if s.secrets == nil {
+		return "", false, errors.New("TOTP encryption unavailable")
+	}
+	secret, err = s.secrets.Decrypt(strings.TrimPrefix(encoded, totpSecretPrefix))
+	return secret, false, err
+}
+
+func (s *PendingAuthService) CreateEnrollment(ctx context.Context, operatorID, version int64, secret string) (string, error) {
+	encoded, err := s.EncodeTOTP(secret)
+	if err != nil {
+		return "", err
+	}
+	token := uuid.New().String()
+	_, err = s.redisClient.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, pendingAuthKey(token), pendingAuthValue(operatorID, version), s.ttl)
+		pipe.Set(ctx, pendingEnrollmentKey(token), encoded, s.ttl)
+		return nil
+	})
+	return token, err
+}
+
+func (s *PendingAuthService) Enrollment(ctx context.Context, token string) (string, error) {
+	return s.redisClient.Get(ctx, pendingEnrollmentKey(token)).Result()
+}
+
+func (s *PendingAuthService) CreatePending(ctx context.Context, operatorID, authVersion int64) (string, error) {
 	token := uuid.New().String()
 	key := pendingAuthKey(token)
 
-	if err := s.redisClient.Set(ctx, key, operatorID, s.ttl).Err(); err != nil {
+	if err := s.redisClient.Set(ctx, key, pendingAuthValue(operatorID, authVersion), s.ttl).Err(); err != nil {
 		return "", fmt.Errorf("failed to store pending auth: %w", err)
 	}
 
 	return token, nil
 }
 
-func (s *PendingAuthService) GetOperatorID(ctx context.Context, token string) (int64, error) {
-	key := pendingAuthKey(token)
+func pendingAuthValue(operatorID, authVersion int64) string {
+	return fmt.Sprintf("%d:%d", operatorID, authVersion)
+}
 
-	operatorID, err := s.redisClient.Get(ctx, key).Int64()
+func (s *PendingAuthService) GetState(ctx context.Context, token string) (int64, int64, error) {
+	value, err := s.redisClient.Get(ctx, pendingAuthKey(token)).Result()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-
-	return operatorID, nil
+	idPart, versionPart, ok := strings.Cut(value, ":")
+	if !ok {
+		return 0, 0, redis.Nil
+	}
+	id, idErr := strconv.ParseInt(idPart, 10, 64)
+	version, versionErr := strconv.ParseInt(versionPart, 10, 64)
+	if idErr != nil || versionErr != nil || id <= 0 || version <= 0 {
+		return 0, 0, redis.Nil
+	}
+	return id, version, nil
 }
 
 func (s *PendingAuthService) Consume(ctx context.Context, token string) error {
-	key := pendingAuthKey(token)
-	return s.redisClient.Del(ctx, key).Err()
+	deleted, err := consumePending.Run(ctx, s.redisClient, []string{pendingAuthKey(token), pendingEnrollmentKey(token)}).Int64()
+	if err == nil && deleted == 0 {
+		return redis.Nil
+	}
+	return err
 }
+
+var consumePending = redis.NewScript(`
+if redis.call("DEL", KEYS[1]) == 0 then return 0 end
+redis.call("DEL", KEYS[2])
+return 1
+`)
 
 func pendingAuthKey(token string) string {
 	return fmt.Sprintf("pending_auth:%s", token)
+}
+
+func pendingEnrollmentKey(token string) string {
+	return "pending_totp:" + token
 }

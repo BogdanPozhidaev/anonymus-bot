@@ -1,12 +1,57 @@
 package api
 
 import (
+	"bytes"
+	"crypto/subtle"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 )
+
+// The API receives JSON and media references. File contents travel separately.
+const maxJSONBodySize = 64 << 10
+
+func limitRequestBody(c *gin.Context) {
+	req := c.Request
+	if req.Body == nil || req.Body == http.NoBody {
+		return
+	}
+	if req.ContentLength > maxJSONBodySize {
+		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+		return
+	}
+	reader := http.MaxBytesReader(c.Writer, req.Body, maxJSONBodySize)
+	body, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		var limit *http.MaxBytesError
+		if errors.As(err, &limit) {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+		} else {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		}
+		return
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+}
+
+func requireInternalToken(token string) gin.HandlerFunc {
+	expected := []byte(token)
+	return func(c *gin.Context) {
+		values := c.Request.Header.Values("X-Internal-Token")
+		// Gin's recovery middleware can dump request headers after a handler panic.
+		c.Request.Header.Del("X-Internal-Token")
+		if len(expected) != 64 || len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), expected) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}
 
 const (
 	contextKeyOperatorID = "operator_id"
@@ -30,8 +75,14 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 			return
 		}
 
+		role, status, version, err := s.operatorRepo.GetAuthState(c.Request.Context(), data.OperatorID)
+		if err != nil || status != models.OperatorStatusActive || version != data.AuthVersion || role != data.Role {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+			return
+		}
+
 		c.Set(contextKeyOperatorID, data.OperatorID)
-		c.Set(contextKeyRole, data.Role)
+		c.Set(contextKeyRole, role)
 		c.Next()
 	}
 }

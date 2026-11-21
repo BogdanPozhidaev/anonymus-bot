@@ -44,6 +44,7 @@ export interface CreateOperatorResponse {
 }
 
 export interface AuditLogEntry {
+  actor_type: string;
   id: number;
   timestamp: string;
   actor_id: number | null;
@@ -67,6 +68,7 @@ export interface Message {
   sent_by_operator: boolean;
   impersonated_role: string | null;
   delivered: boolean;
+  delivery_status?: string;
   created_at: string;
 }
 

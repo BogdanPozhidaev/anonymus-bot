@@ -80,13 +80,13 @@ func (s *Server) pingRedis(ctx context.Context) error {
 	return s.redisClient.Ping(ctx).Err()
 }
 
-func (s *Server) RegisterRoutes(r *gin.Engine) {
+func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 	r.GET("/health", s.handleHealth)
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	r.GET("/api/health", s.handleHealth)
 
-	internal := r.Group("/internal")
+	internal := r.Group("/internal", requireInternalToken(internalToken), limitRequestBody)
 	{
-		internal.POST("/sessions/:id/bind", s.handleBindSession)
+		internal.POST("/sessions/bind", s.handleBindSession)
 		internal.POST("/incoming-requests", s.handleCreateIncomingRequest)
 		internal.GET("/users/by-telegram/:telegramID", s.handleGetUserByTelegramID)
 		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
@@ -100,7 +100,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 		internal.GET("/incoming-requests", s.handleListIncomingRequestsInternal)
 	}
 
-	apiGroup := r.Group("/api")
+	apiGroup := r.Group("/api", limitRequestBody)
 	{
 		// Публичные эндпоинты аутентификации — без requireAuth
 		apiGroup.POST("/auth/login", s.handleLogin)
@@ -115,6 +115,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			authenticated.GET("/sessions", s.handleListSessions)
 			authenticated.GET("/sessions/:id", s.handleGetSession)
 			authenticated.POST("/sessions", s.handleCreateSession)
+			authenticated.POST("/sessions/:id/invites", s.handleIssueInvite)
+			authenticated.DELETE("/sessions/:id/invites/:role", s.handleRevokeInvite)
 			authenticated.PATCH("/sessions/:id/status", s.handleUpdateSessionStatus)
 			authenticated.PATCH("/sessions/:id/owner", s.handleAssignSessionOwner)
 			authenticated.GET("/sessions/:id/messages", s.handleListSessionMessages)
@@ -126,12 +128,16 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 			adminOnly := authenticated.Group("")
 			adminOnly.Use(s.requireAdmin())
 			{
+				adminOnly.GET("/audit-log", s.handleListAuditLog)
 				adminOnly.GET("/operators", s.handleListOperators)
 				adminOnly.POST("/operators", s.handleCreateOperator)
 				adminOnly.PATCH("/operators/:id", s.handleUpdateOperator)
 			}
 
-			authenticated.GET("/audit-log", s.handleListAuditLog)
 		}
 	}
+}
+
+func RegisterSwagger(r *gin.Engine) {
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 }

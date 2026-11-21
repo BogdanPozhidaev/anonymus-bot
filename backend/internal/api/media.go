@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -41,7 +40,7 @@ func (s *Server) handleGetMessageMedia(c *gin.Context) {
 		return
 	}
 
-	if message.FileID == nil {
+	if message.FileID == nil || !models.ValidMediaFileID(*message.FileID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no media attached to this message"})
 		return
 	}
@@ -57,13 +56,28 @@ func (s *Server) handleGetMessageMedia(c *gin.Context) {
 		return
 	}
 
-	path := filepath.Join(dir, *message.FileID+ext)
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "media file no longer available"})
 		return
 	}
-
+	defer func() { _ = root.Close() }()
+	file, err := root.Open(*message.FileID + ext)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media file no longer available"})
+		return
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media file no longer available"})
+		return
+	}
 	c.Header("Content-Type", contentType)
-	c.File(path)
+	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
+	switch c.Writer.Status() {
+	case http.StatusOK, http.StatusPartialContent, http.StatusNotModified:
+		operatorID, _ := getOperatorID(c)
+		s.writeAuditLog(c, operatorID, "operator", "message_media_accessed", "message", messageID, nil)
+	}
 }

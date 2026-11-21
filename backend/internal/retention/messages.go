@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
@@ -53,46 +52,45 @@ func (m *MessageCleaner) Run(ctx context.Context, dryRun bool) (*MessageCleanupR
 	}
 
 	result := &MessageCleanupResult{}
-	var idsToDelete []int64
 
 	for _, msg := range messages {
 		if dryRun {
+			hasFile, err := m.deleteMediaFile(msg, true)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Errorf("message %d: %w", msg.ID, err))
+				continue
+			}
 			m.logger.Info("[DRY RUN] would delete message", "message_id", msg.ID, "content_type", msg.ContentType)
 			result.MessagesDeleted++
-			if msg.FileID != nil {
+			if hasFile {
 				result.FilesDeleted++
 			}
 			continue
 		}
 
-		if msg.FileID != nil {
-			if err := m.deleteMediaFile(msg); err != nil {
-				m.logger.Error("failed to delete media file", "error", err, "message_id", msg.ID, "file_id", *msg.FileID)
-				result.Errors = append(result.Errors, fmt.Errorf("message %d: %w", msg.ID, err))
-				// Продолжаем — отсутствие файла на диске не должно блокировать
-				// удаление записи о сообщении, если файл уже был удалён ранее
-				// (например, повторный запуск после сбоя).
-			} else {
-				result.FilesDeleted++
-			}
+		removedFile := false
+		deleted, err := m.messageRepo.DeleteExpired(ctx, msg, threshold, func() error {
+			var err error
+			removedFile, err = m.deleteMediaFile(msg, false)
+			return err
+		})
+		if removedFile {
+			result.FilesDeleted++
 		}
-
-		idsToDelete = append(idsToDelete, msg.ID)
-	}
-
-	if !dryRun && len(idsToDelete) > 0 {
-		if err := m.messageRepo.DeleteByIDs(ctx, idsToDelete); err != nil {
-			return result, fmt.Errorf("failed to delete message records: %w", err)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("message %d: %w", msg.ID, err))
 		}
-		result.MessagesDeleted = len(idsToDelete)
+		if deleted {
+			result.MessagesDeleted++
+		}
 	}
 
 	return result, nil
 }
 
-func (m *MessageCleaner) deleteMediaFile(msg *models.Message) error {
+func (m *MessageCleaner) deleteMediaFile(msg *models.Message, dryRun bool) (bool, error) {
 	if msg.FileID == nil {
-		return nil
+		return false, nil
 	}
 
 	var dir, ext string
@@ -102,15 +100,35 @@ func (m *MessageCleaner) deleteMediaFile(msg *models.Message) error {
 	case models.ContentTypeVoice:
 		dir, ext = m.voiceDir, ".ogg"
 	default:
-		return nil
+		return false, nil
 	}
 
-	path := filepath.Join(dir, *msg.FileID+ext)
-
-	err := os.Remove(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove file %s: %w", path, err)
+	if !models.ValidMediaFileID(*msg.FileID) || dir == "" {
+		return false, fmt.Errorf("invalid media file reference")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = root.Close() }()
+	path := *msg.FileID + ext
+	info, err := root.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("media path is not a regular file")
+	}
+	if dryRun {
+		return true, nil
 	}
 
-	return nil
+	err = root.Remove(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }

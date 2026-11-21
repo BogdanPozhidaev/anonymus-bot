@@ -1,20 +1,27 @@
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Table, Title, Button, Text, Loader, Badge } from '@mantine/core';
+import { Table, Title, Button, Text, Loader, Badge, Group, Alert } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
 import { listIncomingRequests, markIncomingRequestProcessed } from '../api/incomingRequests';
 import { createSession } from '../api/sessions';
+import { ListPager } from '../components/ListPager';
+
+const pageSize = 50;
 
 export function IncomingRequestsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [status, setStatus] = useState<'new' | 'processed'>('new');
 
-  const { data: requests, isLoading } = useQuery({
-    queryKey: ['incoming-requests'],
-    queryFn: () => listIncomingRequests('new'),
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['incoming-requests', status, offset],
+    queryFn: () => listIncomingRequests(status, pageSize, offset),
     refetchInterval: 10000,
   });
+  const requests = data?.requests;
 
   const createSessionMutation = useMutation({
     mutationFn: async (requestId: number) => {
@@ -37,17 +44,23 @@ export function IncomingRequestsPage() {
     },
   });
 
-  if (isLoading) {
-    return <Loader />;
-  }
-
   return (
     <>
       <Title order={2} mb="md">
         Входящие обращения
       </Title>
 
-      <Table striped highlightOnHover>
+      <Group mb="md">
+        <Button variant={status === 'new' ? 'filled' : 'default'} aria-pressed={status === 'new'} onClick={() => { setStatus('new'); setOffset(0); }}>
+          Новые
+        </Button>
+        <Button variant={status === 'processed' ? 'filled' : 'default'} aria-pressed={status === 'processed'} onClick={() => { setStatus('processed'); setOffset(0); }}>
+          Обработанные
+        </Button>
+      </Group>
+      {isLoading && <Loader />}
+      {isError && <Alert color="red">Не удалось загрузить обращения</Alert>}
+      {requests && <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Имя</Table.Th>
@@ -73,22 +86,23 @@ export function IncomingRequestsPage() {
               </Table.Td>
               <Table.Td>{new Date(req.created_at).toLocaleString('ru-RU')}</Table.Td>
               <Table.Td>
-                <Button
+                {status === 'new' ? <Button
                   size="xs"
                   onClick={() => createSessionMutation.mutate(req.id)}
                   loading={createSessionMutation.isPending}
                 >
                   Создать сессию
-                </Button>
+                </Button> : <Badge variant="light">Обработано</Badge>}
               </Table.Td>
             </Table.Tr>
           ))}
         </Table.Tbody>
-      </Table>
+      </Table>}
+      <ListPager offset={offset} size={pageSize} hasMore={data?.has_more ?? false} loading={isLoading} onChange={setOffset} />
 
       {requests?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">
-          Новых обращений нет
+          {status === 'new' ? 'Новых обращений нет' : 'Обработанных обращений нет'}
         </Text>
       )}
     </>

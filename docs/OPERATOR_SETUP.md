@@ -1,59 +1,24 @@
 # Настройка первого администратора и группы операторов
 
-## Создание первого администратора
+## Bootstrap the first administrator
 
-Система не может создать первого оператора через API — создание оператора
-требует уже существующего авторизованного admin. Поэтому первый admin
-создаётся вручную через SQL.
+Start backend and verify migration status using [MIGRATIONS.MD](MIGRATIONS.MD).
+Save a unique password on one line in a restricted UTF-8 file outside Git.
+The limit is 72 bytes excluding the newline. From the repository root:
 
-### Шаг 1 — сгенерируй хэш пароля
+```powershell
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+Get-Content -Raw -Encoding UTF8 'C:/private/bootstrap-password.txt' |
+  docker compose -f infra/docker-compose.yml run --rm -T --no-deps migrate create-admin --login admin --name Administrator
+```
 
-Временно создай файл `backend/cmd/hashpass/main.go`:
+The CLI receives the password on stdin. The same login is a no-op on repeat
+even when supplied a different password. Another login is refused once
+initialized, including after operators are removed. Additional operators
+are created using the regular administrator interface.
 
-\`\`\`go
-package main
-
-import (
-	"fmt"
-	"os"
-
-	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
-)
-
-func main() {
-	hash, err := auth.HashPassword(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(hash)
-}
-\`\`\`
-
-\`\`\`powershell
-cd backend
-go run ./cmd/hashpass "ВашНадёжныйПароль123!"
-\`\`\`
-
-Скопируй полученный хэш. Удали временный файл после использования:
-\`\`\`powershell
-Remove-Item -Recurse cmd\hashpass
-\`\`\`
-
-### Шаг 2 — вставь оператора в БД
-
-\`\`\`powershell
-cd infra
-docker compose exec postgres psql -U app_user -d mediator_bot -c "INSERT INTO operators (name, login, role, status, password_hash, language) VALUES ('Admin', 'admin', 'admin', 'active', '<вставь_хэш>', 'ru');"
-\`\`\`
-
-### Шаг 3 — войди в веб-панель
-
-Открой веб-панель, войди с логином `admin` и заданным паролем. При первом
-входе будет предложено настроить TOTP 2FA — отсканируй QR-код в
-приложении-аутентификаторе (Google Authenticator, Authy и т.п.).
-
-После этого первого admin можно использовать для создания остальных
-операторов через раздел "Операторы" в панели.
+Sign in using the selected password and complete the existing TOTP setup.
+Remove the temporary password file when the credential is safely stored.
 
 ## Настройка группы операторов в Telegram
 

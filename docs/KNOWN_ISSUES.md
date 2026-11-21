@@ -16,7 +16,9 @@ This is a working index, not a substitute for the detailed `DEVELOPMENT_ROADMAP.
 - Media downloads lack timeout/size bounds; token-bearing URL errors may be logged.
 - Redis session revocation gaps on role/status changes; Redis lacks auth/persistence in reviewed Compose.
 - Audit-log route role restriction is weaker than expected.
-- Message cleanup may leave orphan media; no durable delivery outbox/retry.
+- Files without a message reference can require manual cleanup. P1-1
+  added durable delivery retries. Ambiguous Telegram responses can still
+  cause duplicates. See [Delivery](API.md#message-delivery).
 - Backend startup/shutdown and database lifecycle concerns are listed in roadmap.
 
 ## P2 — product/documentation/maintainability

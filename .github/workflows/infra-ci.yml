@@ -1,0 +1,51 @@
+name: Infrastructure CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and build images
+        shell: bash
+        working-directory: infra
+        run: |
+          fixture=$(mktemp -d)
+          trap 'rm -r -- "$fixture"' EXIT
+          mkdir "$fixture/certs"
+          touch "$fixture/backend-token" "$fixture/bot-token"
+          cat > "$fixture/compose.env" <<EOF
+          POSTGRES_USER=ci
+          POSTGRES_DB=ci
+          POSTGRES_PASSWORD=local-ci-fixture
+          REDIS_PASSWORD=local-ci-fixture-redis-password-0000
+          PII_ENCRYPTION_KEY=$(printf '%032d' 0 | base64 -w0)
+          INTERNAL_API_TOKEN_FILE=$fixture/backend-token
+          BOT_INTERNAL_TOKEN_FILE=$fixture/bot-token
+          TLS_CERT_DIR=$fixture/certs
+          EOF
+          compose=(docker compose --env-file "$fixture/compose.env" -f docker-compose.yml)
+          "${compose[@]}" config --quiet
+          "${compose[@]}" -f docker-compose.dev.yml config --quiet
+          "${compose[@]}" -f docker-compose.tls.yml config --quiet
+          "${compose[@]}" build backend bot retention panel
+
+  migrations:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Migrate isolated PostgreSQL up, down and up
+        run: go test ./tests/repository -run '^TestAllMigrationsRoundTrip$' -count=1 -v

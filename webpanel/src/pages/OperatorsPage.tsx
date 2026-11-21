@@ -23,6 +23,9 @@ import { IconPlus, IconCopy, IconCheck } from '@tabler/icons-react';
 
 import { listOperators, createOperator, updateOperator } from '../api/operators';
 import type { OperatorRole, OperatorStatus } from '../types/api';
+import { ListPager } from '../components/ListPager';
+
+const pageSize = 50;
 
 const statusColors: Record<OperatorStatus, string> = {
   invited: 'blue',
@@ -43,10 +46,12 @@ export function OperatorsPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<{ login: string; password: string } | null>(null);
 
-  const { data: operators, isLoading } = useQuery({
-    queryKey: ['operators'],
-    queryFn: listOperators,
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['operators', offset],
+    queryFn: () => listOperators(pageSize, offset),
   });
+  const operators = data?.operators;
 
   const createForm = useForm({
     initialValues: { name: '', login: '', email: '', role: 'operator' as OperatorRole },
@@ -82,10 +87,6 @@ export function OperatorsPage() {
     setCreatedCredentials(null);
   };
 
-  if (isLoading) {
-    return <Loader />;
-  }
-
   return (
     <>
       <Group justify="space-between" mb="md">
@@ -95,6 +96,8 @@ export function OperatorsPage() {
         </Button>
       </Group>
 
+      {isLoading && <Loader />}
+      {isError && <Alert color="red">Не удалось загрузить операторов</Alert>}
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
@@ -137,6 +140,7 @@ export function OperatorsPage() {
           ))}
         </Table.Tbody>
       </Table>
+      <ListPager offset={offset} size={pageSize} hasMore={data?.has_more ?? false} loading={isLoading} onChange={setOffset} />
 
       <Modal opened={createModalOpen} onClose={handleCloseCreateModal} title="Новый оператор">
         {createdCredentials ? (

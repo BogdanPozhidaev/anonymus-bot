@@ -1,8 +1,12 @@
 package models
 
-import "time"
+import (
+	"github.com/google/uuid"
+	"time"
+)
 
 type Message struct {
+	DeliveryStatus   string    `json:"delivery_status,omitempty"`
 	ID               int64     `db:"id" json:"id"`
 	SessionID        int64     `db:"session_id" json:"session_id"`
 	SenderUserID     *int64    `db:"sender_user_id" json:"sender_user_id"`
@@ -27,3 +31,8 @@ const (
 	ContentTypeVoice  = "voice"
 	ContentTypeSystem = "system"
 )
+
+func ValidMediaFileID(id string) bool {
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed != uuid.Nil && parsed.String() == id
+}

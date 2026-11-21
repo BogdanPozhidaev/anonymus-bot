@@ -1,9 +1,11 @@
 import { apiClient } from './client';
 import type { OperatorListItem, OperatorRole, OperatorStatus, CreateOperatorResponse } from '../types/api';
 
-export async function listOperators(): Promise<OperatorListItem[]> {
-  const response = await apiClient.get<{ operators: OperatorListItem[] }>('/operators');
-  return response.data.operators;
+export async function listOperators(limit: number, offset: number) {
+  const response = await apiClient.get<{ operators: OperatorListItem[]; has_more: boolean }>('/operators', {
+    params: { limit, offset },
+  });
+  return response.data;
 }
 
 export async function createOperator(

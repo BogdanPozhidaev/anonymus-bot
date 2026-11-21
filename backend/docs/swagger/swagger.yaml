@@ -33,6 +33,35 @@ definitions:
       totp_secret:
         type: string
     type: object
+  api.sendAsOperatorRequest:
+    properties:
+      content:
+        type: string
+      content_type:
+        enum:
+        - text
+        type: string
+      impersonated_role:
+        enum:
+        - client
+        - executor
+        type: string
+    required:
+    - content
+    - content_type
+    - impersonated_role
+    type: object
+  api.updateSessionStatusRequest:
+    properties:
+      status:
+        enum:
+        - active
+        - paused
+        - closed
+        type: string
+    required:
+    - status
+    type: object
   api.verifyTOTPRequest:
     properties:
       code:
@@ -186,9 +215,72 @@ paths:
       summary: Подтверждение TOTP-кода
       tags:
       - auth
+  /api/health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Report PostgreSQL and Redis readiness
+      tags:
+      - health
+  /api/incoming-requests:
+    get:
+      parameters:
+      - description: Request status (new or processed)
+        in: query
+        name: status
+        type: string
+      - description: Page size (1–200, default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Number of requests to skip
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List incoming requests
+      tags:
+      - incoming-requests
   /api/operators:
     get:
       description: Доступно только администраторам
+      parameters:
+      - description: Page size (1–200, default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Number of operators to skip
+        in: query
+        name: offset
+        type: integer
       produces:
       - application/json
       responses:
@@ -211,6 +303,23 @@ paths:
   /api/sessions:
     get:
       description: Admin видит все сессии, operator — только свои
+      parameters:
+      - description: Page size (1–200, default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Number of sessions to skip
+        in: query
+        name: offset
+        type: integer
+      - description: Session status
+        in: query
+        name: status
+        type: string
+      - description: Title substring or session ID
+        in: query
+        name: q
+        type: string
       produces:
       - application/json
       responses:
@@ -282,6 +391,136 @@ paths:
       security:
       - BearerAuth: []
       summary: Получить сессию по ID
+      tags:
+      - sessions
+  /api/sessions/{id}/messages:
+    get:
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Page size (1–200, default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Number of newest messages to skip
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Read a page of session history
+      tags:
+      - sessions
+  /api/sessions/{id}/send-as:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Text and sender role
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.sendAsOperatorRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Queue a text message on behalf of a session participant
+      tags:
+      - sessions
+  /api/sessions/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: New status
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.updateSessionStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update session status
       tags:
       - sessions
 securityDefinitions:

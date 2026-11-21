@@ -73,16 +73,10 @@ func TestContainsContactInfo_CleanText(t *testing.T) {
 	}
 }
 
-func TestContainsContactInfo_LongDigits(t *testing.T) {
-	found, reason := moderation.ContainsContactInfo("код заказа 123456789")
-	if !found {
-		t.Error("expected detection of suspicious digit sequence")
-	}
-	// Девятизначная последовательность цифр допустимо распознаётся
-	// либо как потенциальный телефон, либо как длинная цифровая
-	// последовательность — оба варианта корректны с точки зрения
-	// цели теста: убедиться, что подозрительные цифры блокируются.
-	if reason != "phone" && reason != "long_digits" {
-		t.Errorf("expected reason 'phone' or 'long_digits', got %q", reason)
+func TestContainsContactInfoAllowsUnstructuredDigits(t *testing.T) {
+	for _, text := range []string{"order 123456", "order 123456789", "batch 123456789012"} {
+		if found, reason := moderation.ContainsContactInfo(text); found {
+			t.Errorf("ordinary numeric reference %q was blocked: %s", text, reason)
+		}
 	}
 }

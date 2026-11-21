@@ -2,11 +2,7 @@ package handlers
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"os"
 	"path/filepath"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -17,14 +13,15 @@ import (
 )
 
 type VoiceHandler struct {
-	bot      *tgbotapi.BotAPI
-	backend  *backendclient.Client
-	voiceDir string
-	logger   *slog.Logger
+	bot        *tgbotapi.BotAPI
+	backend    *backendclient.Client
+	voiceDir   string
+	logger     *slog.Logger
+	downloader mediaDownloader
 }
 
 func NewVoiceHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, voiceDir string, logger *slog.Logger) *VoiceHandler {
-	return &VoiceHandler{bot: bot, backend: backend, voiceDir: voiceDir, logger: logger}
+	return &VoiceHandler{bot: bot, backend: backend, voiceDir: voiceDir, logger: logger, downloader: telegramMediaDownloader}
 }
 
 func (h *VoiceHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
@@ -35,8 +32,8 @@ func (h *VoiceHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	fileID := uuid.New().String()
 	filePath := filepath.Join(h.voiceDir, fileID+".ogg")
 
-	if err := h.downloadTelegramFile(message.Voice.FileID, filePath); err != nil {
-		h.logger.Error("failed to download voice", "error", err, "chat_id", message.Chat.ID)
+	if err := h.downloader.download(ctx, h.bot.Token, message.Voice.FileID, filePath); err != nil {
+		h.logger.Error("failed to download voice", "error", err)
 		h.sendErrorNotice(message.Chat.ID)
 		return
 	}
@@ -44,78 +41,30 @@ func (h *VoiceHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 	req := backendclient.RelayMessageRequest{
 		SenderTelegramID: message.From.ID,
 		ContentType:      "voice",
+		Content:          message.Caption,
 		FileID:           fileID,
 	}
 
 	resp, err := h.backend.RelayMessage(ctx, req)
 	if err != nil {
-		h.logger.Error("failed to relay voice message", "error", err, "chat_id", message.Chat.ID)
-		_ = fileutil.RemoveFile(filePath)
+		h.logger.Error("failed to relay voice message", "error", err)
+		// A failed response does not prove the backend did not save the message.
 		h.sendErrorNotice(message.Chat.ID)
 		return
 	}
 
 	if resp.Blocked {
-		h.logger.Info("voice message blocked", "reason", resp.BlockReason, "chat_id", message.Chat.ID)
-		if resp.BlockReason != "counterparty_not_bound_yet" {
-			_ = fileutil.RemoveFile(filePath)
+		h.logger.Info("voice message blocked", "reason", resp.BlockReason)
+		if resp.MessageID == 0 && resp.BlockReason != "counterparty_not_bound_yet" {
+			if err := fileutil.RemoveFile(filePath); err != nil {
+				h.logger.Error("failed to remove unpublished media", "error", err)
+			}
 		}
 		h.handleBlockedReason(message.Chat.ID, resp.BlockReason)
 		return
 	}
 
-	h.logger.Info("voice message relayed", "message_id", resp.MessageID, "chat_id", message.Chat.ID)
-	h.deliverVoice(resp.RecipientTelegramID, resp.SenderLabel, filePath, resp.SessionID)
-}
-
-func (h *VoiceHandler) downloadTelegramFile(telegramFileID, destPath string) error {
-	file, err := h.bot.GetFile(tgbotapi.FileConfig{FileID: telegramFileID})
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %w", err)
-	}
-
-	url := file.Link(h.bot.Token)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to download file: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code downloading file: %d", resp.StatusCode)
-	}
-
-	out, err := os.Create(destPath)
-	if err != nil {
-		return fmt.Errorf("failed to create destination file: %w", err)
-	}
-	defer func() {
-		_ = out.Close()
-	}()
-
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		return fmt.Errorf("failed to save file: %w", err)
-	}
-
-	return nil
-}
-
-func (h *VoiceHandler) deliverVoice(recipientTelegramID int64, senderLabel, filePath string, sessionID int64) {
-	voice := tgbotapi.NewVoice(recipientTelegramID, tgbotapi.FilePath(filePath))
-	voice.Caption = senderLabel
-	voice.ReplyMarkup = replyHereKeyboard(sessionID)
-
-	if _, err := h.bot.Send(voice); err != nil {
-		h.logger.Error("failed to deliver voice to recipient", "error", err, "recipient_telegram_id", recipientTelegramID)
-		return
-	}
-
-	if err := fileutil.RemoveFile(filePath); err != nil {
-		h.logger.Error("failed to remove delivered voice file", "error", err, "file_path", filePath)
-	}
+	h.logger.Info("voice message relayed", "message_id", resp.MessageID)
 }
 
 func (h *VoiceHandler) handleBlockedReason(chatID int64, reason string) {
@@ -127,6 +76,10 @@ func (h *VoiceHandler) handleBlockedReason(chatID int64, reason string) {
 		text = "Сессия сейчас недоступна для отправки сообщений."
 	case "counterparty_not_bound_yet":
 		text = "Вторая сторона ещё не подключилась к сессии. Ваше голосовое сообщение будет доставлено, как только это произойдёт."
+	case "moderation_violation":
+		text = "Голосовое сообщение не отправлено. Проверьте подпись на наличие контактных данных."
+	case "moderation_unavailable":
+		text = "Проверка подписи недоступна. Попробуйте отправить сообщение позже."
 	default:
 		text = "Сообщение не может быть доставлено."
 	}
@@ -141,6 +94,6 @@ func (h *VoiceHandler) sendErrorNotice(chatID int64) {
 func (h *VoiceHandler) sendMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to send message", "error", err, "chat_id", chatID)
+		h.logger.Error("failed to send message")
 	}
 }

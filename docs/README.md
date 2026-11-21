@@ -50,34 +50,27 @@ MVP-версия Telegram-бота и веб-панели для организ�
 - Retention: анонимизация PII через 3 месяца после закрытия сессии, удаление сообщений/медиа через 12 месяцев
 - Ежедневный автозапуск retention с dry-run режимом для предпросмотра
 
-## Запуск локально
+## Local startup
 
-1. Склонируй репозиторий
-2. Скопируй пример конфига: cp infra/.env.example infra/.env
-3. Заполни `infra/.env`:
-   - `PII_ENCRYPTION_KEY` — сгенерируй через `openssl rand -base64 32`
-   - `TELEGRAM_BOT_TOKEN` — получи у @BotFather
-   - `OPERATOR_GROUP_CHAT_ID` — chat_id группы операторов в Telegram (см. `docs/OPERATOR_SETUP.md`)
-4. Подними инфраструктуру:
-cd infra
-docker compose up --build
-5. Проверь работоспособность:
-curl http://localhost/api/health
-   Ожидаемый ответ: `{"status":"ok","postgres":"ok","redis":"ok"}`
-6. Подними веб-панель отдельно для разработки:
-cd webpanel
-npm install
-npm run dev
+For the production panel image, the Nginx routes and owner-provided TLS
+certificates, follow [DEPLOYMENT.md](DEPLOYMENT.md).
 
-   Откроется на `http://localhost:5173`
+1. Copy `infra/.env.example` to `infra/.env`. Set PostgreSQL and Redis
+   passwords, a base64 PII key and both service-token files. See
+   [ENV_VARS.md](ENV_VARS.md).
+2. From the repository root, start dependencies, migrate, and start backend:
 
-## Первый администратор
+   ```powershell
+   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build backend
+   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm -T migrate migrate status
+   ```
 
-Так как создание операторов в системе требует уже существующего admin, первого администратора нужно создать вручную через SQL — см. `docs/OPERATOR_SETUP.md`.
-
-## Миграции БД
-
-См. [docs/MIGRATIONS.md](docs/MIGRATIONS.md) — на Windows миграции выполняются через Docker-образ `migrate/migrate`, нативный `migrate.exe` имеет проблемы с сетевым подключением.
+3. Check `http://127.0.0.1:8080/health` and create the first admin using
+   [OPERATOR_SETUP.md](OPERATOR_SETUP.md).
+4. In `webpanel`, run `npm.cmd ci` and `npm.cmd run dev`. Open
+   `http://localhost:5173` to sign in and complete TOTP.
+5. Start `bot` separately when its Telegram settings are ready. Start the
+   scheduled retention service separately after inspecting a dry run.
 
 ## Retention
 

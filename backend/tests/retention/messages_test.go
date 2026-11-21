@@ -38,7 +38,7 @@ func TestMessageCleaner_Run_DeletesOldMessagesAndFiles(t *testing.T) {
 	}
 	ageSessionClosedAt(t, pool, session.ID, 13*30*24*time.Hour) // старше 12 месяцев
 
-	fileID := "test-file-123"
+	fileID := "38c45a07-ff42-40ce-92f5-4f6e03dfaf22"
 	photoPath := filepath.Join(photosDir, fileID+".jpg")
 	if err := os.WriteFile(photoPath, []byte("fake image data"), 0644); err != nil {
 		t.Fatalf("failed to create test photo file: %v", err)
@@ -91,6 +91,50 @@ func TestMessageCleaner_Run_DeletesOldMessagesAndFiles(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 remaining messages, got %d", len(remaining))
+	}
+	result, err = cleaner.Run(ctx, false)
+	if err != nil || result.MessagesDeleted != 0 || result.FilesDeleted != 0 || len(result.Errors) != 0 {
+		t.Fatalf("second cleanup was not a no-op: %+v, %v", result, err)
+	}
+}
+
+func TestMessageCleanerPreservesSharedFileUntilLastReferenceExpires(t *testing.T) {
+	pool := setupTestDB(t)
+	ctx := context.Background()
+	sessions := repository.NewSessionRepository(pool)
+	messages := repository.NewMessageRepository(pool)
+	dir := t.TempDir()
+	fileID := "38c45a07-ff42-40ce-92f5-4f6e03dfaf22"
+	path := filepath.Join(dir, fileID+".ogg")
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var sessionIDs []int64
+	for range 2 {
+		s := models.Session{Title: "fixture", Status: models.SessionStatusActive, Language: "ru"}
+		if err := sessions.Create(ctx, &s); err != nil {
+			t.Fatal(err)
+		}
+		sessionIDs = append(sessionIDs, s.ID)
+		m := models.Message{SessionID: s.ID, SenderRole: models.SenderRoleClient, ContentType: models.ContentTypeVoice, FileID: &fileID}
+		if err := messages.Create(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleaner := retention.NewMessageCleaner(messages, dir, dir, retention.DefaultConfig(), slog.Default())
+	for i, id := range sessionIDs {
+		if err := sessions.UpdateStatus(ctx, id, models.SessionStatusClosed); err != nil {
+			t.Fatal(err)
+		}
+		ageSessionClosedAt(t, pool, id, 400*24*time.Hour)
+		result, err := cleaner.Run(ctx, false)
+		if err != nil || len(result.Errors) != 0 || result.MessagesDeleted != 1 || result.FilesDeleted != i {
+			t.Fatalf("cleanup %d: %+v, %v", i, result, err)
+		}
+		_, statErr := os.Stat(path)
+		if (i == 0 && statErr != nil) || (i == 1 && !os.IsNotExist(statErr)) {
+			t.Fatalf("unexpected media state after cleanup %d: %v", i, statErr)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -224,27 +225,46 @@ func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targ
 // обнуляются, telegram_id заменяется на гарантированно нерабочее отрицательное
 // значение (сохраняя NOT NULL/UNIQUE constraint, но делая невозможным сопоставление
 // с реальным Telegram-аккаунтом). Используется только retention-процессом.
-func (r *UserRepository) AnonymizeUser(ctx context.Context, userID int64) error {
+func (r *UserRepository) AnonymizeUser(ctx context.Context, userID int64, threshold time.Time) (bool, error) {
 	// Отрицательный telegram_id, гарантированно уникальный и невалидный
 	// (реальные Telegram ID всегда положительны), формируется из ID записи
 	// с обратным знаком минус большая константа — исключает коллизии между
 	// анонимизированными пользователями.
 	anonymizedTelegramID := -(userID + 1_000_000_000_000)
 
-	query := `
-		UPDATE users
-		SET username = NULL, first_name = NULL, telegram_id = $1
-		WHERE id = $2
-	`
+	return r.anonymizeEligibleUser(ctx, userID, anonymizedTelegramID, threshold)
+}
 
-	cmdTag, err := r.pool.Exec(ctx, query, anonymizedTelegramID, userID)
-	if err != nil {
-		return fmt.Errorf("failed to anonymize user: %w", err)
-	}
+const anonymizationEligibility = `
+	telegram_id > 0
+	AND NOT EXISTS (
+		SELECT 1 FROM sessions
+		WHERE status <> 'closed' AND (client_user_id = users.id OR executor_user_id = users.id)
+	)
+	AND EXISTS (
+		SELECT 1 FROM sessions
+		WHERE status = 'closed' AND closed_at < $2
+			AND (client_user_id = users.id OR executor_user_id = users.id)
+	)`
 
-	if cmdTag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
+func (r *UserRepository) CanAnonymizeUser(ctx context.Context, userID int64, threshold time.Time) (bool, error) {
+	var eligible bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND `+
+		anonymizationEligibility+`)`, userID, threshold).Scan(&eligible)
+	return eligible, err
+}
 
-	return nil
+func (r *UserRepository) anonymizeEligibleUser(ctx context.Context, userID, telegramID int64, threshold time.Time) (bool, error) {
+	var changed bool
+	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		// Keep session membership and status stable while eligibility is evaluated.
+		if _, err := tx.Exec(ctx, "LOCK TABLE sessions IN SHARE MODE"); err != nil {
+			return err
+		}
+		result, err := tx.Exec(ctx, `UPDATE users SET username = NULL, first_name = NULL, telegram_id = $3
+			WHERE id = $1 AND `+anonymizationEligibility, userID, threshold, telegramID)
+		changed = result.RowsAffected() == 1
+		return err
+	})
+	return changed && err == nil, err
 }

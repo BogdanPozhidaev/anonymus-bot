@@ -3,8 +3,12 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
@@ -35,6 +39,30 @@ type verifyTOTPResponse struct {
 	Role         string `json:"role"`
 }
 
+// This dummy bcrypt hash uses the same cost as operator passwords.
+const dummyOperatorPasswordHash = "$2a$12$....................................................."
+
+func rejectAuthThrottle(c *gin.Context, retry time.Duration, err error) bool {
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication temporarily unavailable"})
+		return true
+	}
+	if retry > 0 {
+		c.Header("Retry-After", strconv.FormatInt(int64((retry+time.Second-1)/time.Second), 10))
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+		return true
+	}
+	return false
+}
+
+func operatorCanAuthenticate(operator *models.Operator) bool {
+	return operator.Status == models.OperatorStatusActive || operator.Status == models.OperatorStatusInvited
+}
+
+func operatorNeedsTOTPEnrollment(operator *models.Operator) bool {
+	return operator.TOTPSecret == nil || operator.Status == models.OperatorStatusInvited
+}
+
 // handleLogin godoc
 // @Summary      Логин оператора
 // @Description  Первый шаг аутентификации — проверка логина/пароля
@@ -46,19 +74,27 @@ type verifyTOTPResponse struct {
 // @Failure      401 {object} map[string]string
 // @Router       /api/auth/login [post]
 func (s *Server) handleLogin(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
 	ctx := c.Request.Context()
 
+	retry, err := auth.ReserveLoginAttempt(ctx, s.redisClient, req.Login, c.ClientIP())
+	if rejectAuthThrottle(c, retry, err) {
+		return
+	}
+
 	operator, err := s.operatorRepo.GetByLogin(ctx, req.Login)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
+			auth.VerifyPassword(dummyOperatorPasswordHash, req.Password)
 			// Одинаковый ответ на "нет такого логина" и "неверный пароль" —
 			// не даём подсказки об существовании конкретного аккаунта.
+			s.writeAuditLog(c, 0, "unknown", "operator_login_failed", "", 0, nil)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
@@ -66,30 +102,25 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 
-	if operator.Status == models.OperatorStatusDisabled || operator.Status == models.OperatorStatusSuspended {
-		c.JSON(http.StatusForbidden, gin.H{"error": "account is not active"})
-		return
+	hash := dummyOperatorPasswordHash
+	if operator.PasswordHash != nil {
+		hash = *operator.PasswordHash
 	}
-
-	if operator.PasswordHash == nil || !auth.VerifyPassword(*operator.PasswordHash, req.Password) {
+	passwordMatches := auth.VerifyPassword(hash, req.Password)
+	if !passwordMatches || operator.PasswordHash == nil || !operatorCanAuthenticate(operator) {
+		s.writeAuditLog(c, operator.ID, "operator", "operator_login_failed", "operator", operator.ID, nil)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	if operator.TOTPSecret == nil {
+	if operatorNeedsTOTPEnrollment(operator) {
 		secret, qrURL, err := auth.GenerateTOTPSecret(operator.Login, "AnonymusBot")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate 2fa secret"})
 			return
 		}
 
-		operator.TOTPSecret = &secret
-		if err := s.operatorRepo.Update(ctx, operator); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save 2fa secret"})
-			return
-		}
-
-		pendingToken, err := s.pendingAuthService.CreatePending(ctx, operator.ID)
+		pendingToken, err := s.pendingAuthService.CreateEnrollment(ctx, operator.ID, operator.AuthVersion, secret)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create pending auth"})
 			return
@@ -104,7 +135,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 
-	pendingToken, err := s.pendingAuthService.CreatePending(ctx, operator.ID)
+	pendingToken, err := s.pendingAuthService.CreatePending(ctx, operator.ID, operator.AuthVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create pending auth"})
 		return
@@ -127,17 +158,33 @@ func (s *Server) handleLogin(c *gin.Context) {
 // @Failure      401 {object} map[string]string
 // @Router       /api/auth/totp/verify [post]
 func (s *Server) handleVerifyTOTP(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	var req verifyTOTPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
 	ctx := c.Request.Context()
 
-	operatorID, err := s.pendingAuthService.GetOperatorID(ctx, req.PendingToken)
-	if err != nil {
+	if err := uuid.Validate(req.PendingToken); err != nil || len(req.PendingToken) != 36 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
+		return
+	}
+	operatorID, authVersion, err := s.pendingAuthService.GetState(ctx, req.PendingToken)
+	if errors.Is(err, redis.Nil) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
+		return
+	}
+	if rejectAuthThrottle(c, 0, err) {
+		return
+	}
+	retry, err := s.pendingAuthService.ReserveAttempt(ctx, req.PendingToken, operatorID, authVersion)
+	if errors.Is(err, redis.Nil) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
+		return
+	}
+	if rejectAuthThrottle(c, retry, err) {
 		return
 	}
 
@@ -146,45 +193,84 @@ func (s *Server) handleVerifyTOTP(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-
-	if operator.TOTPSecret == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "2fa not configured"})
+	if !operatorCanAuthenticate(operator) || operator.AuthVersion != authVersion {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
 		return
 	}
 
-	if !auth.VerifyTOTPCode(*operator.TOTPSecret, req.Code) {
+	enrollment := operatorNeedsTOTPEnrollment(operator)
+	var stored string
+	if enrollment {
+		stored, err = s.pendingAuthService.Enrollment(ctx, req.PendingToken)
+		if errors.Is(err, redis.Nil) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
+			return
+		}
+		if rejectAuthThrottle(c, 0, err) {
+			return
+		}
+	} else {
+		stored = *operator.TOTPSecret
+	}
+	secret, legacy, err := s.pendingAuthService.DecodeTOTP(stored)
+	if err != nil || (enrollment && legacy) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication temporarily unavailable"})
+		return
+	}
+
+	if !auth.VerifyTOTPCode(secret, req.Code) {
+		s.writeAuditLog(c, operator.ID, "operator", "operator_login_failed", "operator", operator.ID, nil)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid 2fa code"})
 		return
 	}
 
-	if err := s.pendingAuthService.Consume(ctx, req.PendingToken); err != nil {
-		s.logger.Error("failed to consume pending auth token", "error", err)
+	err = s.pendingAuthService.Consume(ctx, req.PendingToken)
+	if errors.Is(err, redis.Nil) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired pending token"})
+		return
+	}
+	if rejectAuthThrottle(c, 0, err) {
+		return
+	}
+
+	var confirmedSecret *string
+	if enrollment {
+		confirmedSecret = &stored
+	} else if legacy {
+		encoded, err := s.pendingAuthService.EncodeTOTP(secret)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication temporarily unavailable"})
+			return
+		}
+		confirmedSecret = &encoded
+	}
+	if err := s.operatorRepo.RecordVerifiedLogin(ctx, operator, confirmedSecret, enrollment); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusConflict, gin.H{"error": "operator state changed, sign in again"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication temporarily unavailable"})
+		return
 	}
 
 	sessionToken, err := s.sessionService.Create(ctx, auth.SessionData{
-		OperatorID: operator.ID,
-		Role:       operator.Role,
+		AuthVersion: operator.AuthVersion,
+		OperatorID:  operator.ID,
+		Role:        operator.Role,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 		return
 	}
 
-	if operator.Status == models.OperatorStatusInvited {
-		operator.Status = models.OperatorStatusActive
-		if err := s.operatorRepo.Update(ctx, operator); err != nil {
-			s.logger.Error("failed to activate operator after first login", "error", err, "operator_id", operator.ID)
-		}
-	}
-
+	c.Set(contextKeyRole, operator.Role)
+	s.writeAuditLog(c, operator.ID, "operator", "operator_login", "operator", operator.ID, nil)
 	c.JSON(http.StatusOK, verifyTOTPResponse{
 		SessionToken: sessionToken,
 		OperatorID:   operator.ID,
 		Role:         operator.Role,
 	})
 }
-
-type logoutRequest struct{}
 
 func (s *Server) handleLogout(c *gin.Context) {
 	token := extractSessionToken(c)
@@ -198,6 +284,8 @@ func (s *Server) handleLogout(c *gin.Context) {
 		return
 	}
 
+	operatorID, _ := getOperatorID(c)
+	s.writeAuditLog(c, operatorID, "operator", "operator_logout", "operator", operatorID, nil)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

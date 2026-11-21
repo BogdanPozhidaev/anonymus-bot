@@ -41,6 +41,6 @@ func (h *HelpHandler) Handle(message *tgbotapi.Message) {
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
 	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to send help message", "error", err, "chat_id", message.Chat.ID)
+		h.logger.Error("failed to send help message")
 	}
 }

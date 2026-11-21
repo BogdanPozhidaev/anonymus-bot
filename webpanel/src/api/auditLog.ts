@@ -3,17 +3,19 @@ import type { AuditLogEntry } from '../types/api';
 
 export interface AuditLogFilters {
   actor_id?: number;
+  limit?: number;
+  offset?: number;
   action?: string;
   target_type?: string;
   date_from?: string;
   date_to?: string;
 }
 
-export async function listAuditLog(filters: AuditLogFilters = {}): Promise<AuditLogEntry[]> {
-  const response = await apiClient.get<{ entries: AuditLogEntry[] }>('/audit-log', {
+export async function listAuditLog(filters: AuditLogFilters = {}): Promise<{ entries: AuditLogEntry[]; has_more: boolean }> {
+  const response = await apiClient.get<{ entries: AuditLogEntry[]; has_more: boolean }>('/audit-log', {
     params: filters,
   });
-  return response.data.entries;
+  return response.data;
 }
 
 export async function downloadAuditLogCsv(filters: AuditLogFilters = {}): Promise<void> {

@@ -10,12 +10,10 @@ type RelayMessageRequest struct {
 }
 
 type RelayMessageResponse struct {
-	Blocked             bool   `json:"blocked"`
-	BlockReason         string `json:"block_reason,omitempty"`
-	RecipientTelegramID int64  `json:"recipient_telegram_id,omitempty"`
-	SenderLabel         string `json:"sender_label,omitempty"`
-	MessageID           int64  `json:"message_id,omitempty"`
-	SessionID           int64  `json:"session_id,omitempty"`
+	Blocked     bool   `json:"blocked"`
+	BlockReason string `json:"block_reason,omitempty"`
+	MessageID   int64  `json:"message_id,omitempty"`
+	SessionID   int64  `json:"session_id,omitempty"`
 }
 
 func (c *Client) RelayMessage(ctx context.Context, req RelayMessageRequest) (*RelayMessageResponse, error) {

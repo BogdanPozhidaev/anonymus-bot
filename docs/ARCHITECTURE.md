@@ -24,6 +24,11 @@
 - Browser/operator ↔ Nginx ↔ backend operator API.
 - Backend/bot/retention containers ↔ PostgreSQL, Redis, and shared media volumes.
 
+The backend authenticates bot requests on `/internal/*` using a service token
+mounted into both containers. The base Compose stack keeps port 8080 on the
+bridge network, and the development override publishes it on loopback.
+Nginx rejects `/api/internal` and its descendants before proxying.
+
 The audited baseline had unauthenticated internal routes on the backend and a published backend port; see `SECURITY_AUDIT.md`. Do not assume an internal route is protected merely because its path contains `/internal`.
 
 ## Deployment caveats found in static review

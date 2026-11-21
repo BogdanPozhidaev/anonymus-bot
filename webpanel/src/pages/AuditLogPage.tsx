@@ -1,22 +1,26 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Table, Title, Button, Group, TextInput, Loader, Text, Code } from '@mantine/core';
+import { Table, Title, Button, Group, TextInput, Loader, Text, Code, Alert } from '@mantine/core';
 import { IconDownload } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
 import { listAuditLog, downloadAuditLogCsv, type AuditLogFilters } from '../api/auditLog';
 
 export function AuditLogPage() {
-  const [filters, setFilters] = useState<AuditLogFilters>({});
+  const pageSize = 100;
+  const [filters, setFilters] = useState<AuditLogFilters>({ limit: pageSize, offset: 0 });
   const [actionFilter, setActionFilter] = useState('');
 
-  const { data: entries, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['audit-log', filters],
     queryFn: () => listAuditLog(filters),
   });
 
+  const entries = data?.entries;
+  const offset = filters.offset ?? 0;
+
   const handleFilterApply = () => {
-    setFilters({ action: actionFilter || undefined });
+    setFilters({ action: actionFilter || undefined, limit: pageSize, offset: 0 });
   };
 
   const handleExport = async () => {
@@ -32,7 +36,7 @@ export function AuditLogPage() {
       <Group justify="space-between" mb="md">
         <Title order={2}>Аудит действий</Title>
         <Button leftSection={<IconDownload size={18} />} onClick={handleExport} variant="light">
-          Экспорт CSV
+          Экспорт страницы CSV
         </Button>
       </Group>
 
@@ -48,7 +52,9 @@ export function AuditLogPage() {
         </Button>
       </Group>
 
-      {isLoading ? (
+      {isError ? (
+        <Alert color="red">Не удалось загрузить журнал</Alert>
+      ) : isLoading ? (
         <Loader />
       ) : (
         <Table striped highlightOnHover>
@@ -65,7 +71,7 @@ export function AuditLogPage() {
             {entries?.map((entry) => (
               <Table.Tr key={entry.id}>
                 <Table.Td>{new Date(entry.timestamp).toLocaleString('ru-RU')}</Table.Td>
-                <Table.Td>{entry.actor_id ?? '—'}</Table.Td>
+                <Table.Td>{entry.actor_id == null ? entry.actor_type : `${entry.actor_type} #${entry.actor_id}`}</Table.Td>
                 <Table.Td>{entry.action}</Table.Td>
                 <Table.Td>
                   {entry.target_type ? `${entry.target_type} #${entry.target_id}` : '—'}
@@ -84,6 +90,15 @@ export function AuditLogPage() {
           </Table.Tbody>
         </Table>
       )}
+
+      <Group mt="md">
+        <Button variant="default" disabled={offset === 0 || isLoading} onClick={() => setFilters({ ...filters, offset: offset - pageSize })}>
+          Назад
+        </Button>
+        <Button variant="default" disabled={!data?.has_more || offset >= 1000000} onClick={() => setFilters({ ...filters, offset: offset + pageSize })}>
+          Далее
+        </Button>
+      </Group>
 
       {entries?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">

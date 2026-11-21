@@ -1,6 +1,10 @@
 package moderation
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+	"unicode"
+)
 
 type patternEntry struct {
 	name    string
@@ -22,24 +26,51 @@ var patterns = []patternEntry{
 	},
 	{
 		name:    "username",
-		pattern: regexp.MustCompile(`@[a-zA-Z0-9_]{5,32}`),
+		pattern: regexp.MustCompile(`(?:^|[^a-zA-Z0-9_.%+-])@[a-zA-Z0-9_]{5,32}(?:$|[^a-zA-Z0-9_])`),
 	},
 	{
 		name:    "phone",
-		pattern: regexp.MustCompile(`(?:\+?\d{1,3}[\s\-]?)?\(?\d{3,4}\)?[\s\-]?\d{2,3}[\s\-]?\d{2}[\s\-]?\d{2,4}`),
+		pattern: regexp.MustCompile(`(?:^|[^[:alnum:]_])(?:\+[1-9](?:[ \t().-]{0,3}\d){7,14}|[78]\d{10}|[78][ -]?(?:\(\d{3}\)|\d{3})[ -]?\d{3}[ -]\d{2}[ -]\d{2}|\(\d{3}\)[ ]?\d{3}-\d{4})(?:$|[^[:alnum:]_])`),
 	},
-	{
-		name:    "long_digits",
-		pattern: regexp.MustCompile(`\d{6,12}`),
-	},
+}
+
+var (
+	dot = regexp.MustCompile(`(?i)[ \t]*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\.)[ \t]*`)
+	at  = regexp.MustCompile(`(?i)[ \t]*(?:\[\s*at\s*\]|\(\s*at\s*\)|@)[ \t]*`)
+)
+
+func normalizeWidth(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			return -1
+		case r >= '！' && r <= '～':
+			return r - '！' + '!'
+		case unicode.IsSpace(r) && r != '\n':
+			return ' '
+		default:
+			return r
+		}
+	}, text)
 }
 
 // ContainsContactInfo проверяет текст на наличие любого признака утечки контактов.
 // Проверяются ВСЕ паттерны; если совпало несколько, возвращается наиболее
 // специфичная причина согласно порядку в patterns (email важнее username и т.д.).
 func ContainsContactInfo(text string) (bool, string) {
+	return matchContact(text, nil)
+}
+
+func matchContact(text string, disabled map[string]bool) (bool, string) {
+	text = dot.ReplaceAllString(normalizeWidth(text), ".")
+	// Preserve the word boundary before a handle while allowing obfuscated email.
+	emailText := at.ReplaceAllString(text, "@")
 	for _, p := range patterns {
-		if p.pattern.MatchString(text) {
+		candidate := text
+		if p.name == "email" {
+			candidate = emailText
+		}
+		if !disabled[p.name] && p.pattern.MatchString(candidate) {
 			return true, p.name
 		}
 	}

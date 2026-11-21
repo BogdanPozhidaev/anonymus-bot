@@ -3,10 +3,41 @@ package moderation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+const violationTTL = 24 * time.Hour
+const pauseThreshold = 3
+
+type Config struct {
+	disabled  map[string]bool
+	autoPause bool
+}
+
+func ParseConfig(disabledRules, autoPause string) (Config, error) {
+	cfg := Config{disabled: make(map[string]bool)}
+	if disabledRules != "" {
+		for _, rule := range strings.Split(disabledRules, ",") {
+			switch key := strings.TrimSpace(rule); key {
+			case "email", "messenger_link", "username", "phone", "suspicious_phrase":
+				cfg.disabled[key] = true
+			default:
+				return Config{}, fmt.Errorf("MODERATION_DISABLED_RULES contains an unknown rule")
+			}
+		}
+	}
+	switch autoPause {
+	case "true":
+		cfg.autoPause = true
+	case "", "false":
+	default:
+		return Config{}, fmt.Errorf("MODERATION_AUTO_PAUSE must be true or false")
+	}
+	return cfg, nil
+}
 
 type CheckResult struct {
 	Blocked        bool
@@ -16,58 +47,45 @@ type CheckResult struct {
 }
 
 type Service struct {
-	redisClient    *redis.Client
-	violationTTL   time.Duration
-	pauseThreshold int64
+	redisClient *redis.Client
+	config      Config
 }
 
-func NewService(redisClient *redis.Client) *Service {
-	return &Service{
-		redisClient:    redisClient,
-		violationTTL:   24 * time.Hour,
-		pauseThreshold: 3,
-	}
+func NewService(redisClient *redis.Client, config Config) *Service {
+	return &Service{redisClient: redisClient, config: config}
 }
 
-// Check проверяет текст на нарушения модерации. Если нарушение найдено,
-// увеличивает счётчик срабатываний пользователя в Redis и сообщает,
-// нужно ли поставить сессию на паузу (при достижении порога).
-func (s *Service) Check(ctx context.Context, userID int64, text string) (CheckResult, error) {
-	if blocked, reason := ContainsContactInfo(text); blocked {
-		return s.recordViolation(ctx, userID, reason)
+func (s *Service) Check(ctx context.Context, sessionID int64, actorType string, actorID int64, text string) (CheckResult, error) {
+	blocked, reason := matchContact(text, s.config.disabled)
+	if !blocked && !s.config.disabled["suspicious_phrase"] {
+		blocked, _ = ContainsSuspiciousPhrase(text)
+		reason = "suspicious_phrase"
+	}
+	if !blocked {
+		return CheckResult{}, nil
 	}
 
-	if blocked, reason := ContainsSuspiciousPhrase(text); blocked {
-		return s.recordViolation(ctx, userID, "suspicious_phrase:"+reason)
-	}
-
-	return CheckResult{Blocked: false}, nil
-}
-
-func (s *Service) recordViolation(ctx context.Context, userID int64, reason string) (CheckResult, error) {
-	key := violationKey(userID)
-
-	count, err := s.redisClient.Incr(ctx, key).Result()
+	count, err := countViolation.Run(ctx, s.redisClient, []string{violationKey(sessionID)}, fmt.Sprintf("%s:%d", actorType, actorID), violationTTL.Milliseconds()).Int64()
 	if err != nil {
-		return CheckResult{}, fmt.Errorf("failed to increment violation counter: %w", err)
+		return CheckResult{}, fmt.Errorf("failed to record moderation violation: %w", err)
 	}
-
-	// TTL устанавливается только при первом нарушении (когда счётчик стал 1),
-	// чтобы повторные Incr не продлевали окно бесконечно.
-	if count == 1 {
-		if err := s.redisClient.Expire(ctx, key, s.violationTTL).Err(); err != nil {
-			return CheckResult{}, fmt.Errorf("failed to set violation counter TTL: %w", err)
-		}
-	}
-
-	return CheckResult{
-		Blocked:        true,
-		Reason:         reason,
-		ViolationCount: count,
-		ShouldPause:    count >= s.pauseThreshold,
-	}, nil
+	return CheckResult{Blocked: true, Reason: reason, ViolationCount: count, ShouldPause: s.config.autoPause && count >= pauseThreshold}, nil
 }
 
-func violationKey(userID int64) string {
-	return fmt.Sprintf("moderation:violations:%d", userID)
+// Keep one expiry per session window and reset all actor counters together.
+var countViolation = redis.NewScript(`
+local fresh = redis.call("EXISTS", KEYS[1]) == 0
+local count = redis.call("HINCRBY", KEYS[1], ARGV[1], 1)
+if fresh then
+    redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return count
+`)
+
+func (s *Service) Reset(ctx context.Context, sessionID int64) error {
+	return s.redisClient.Del(ctx, violationKey(sessionID)).Err()
+}
+
+func violationKey(sessionID int64) string {
+	return fmt.Sprintf("moderation:session:%d:violations", sessionID)
 }

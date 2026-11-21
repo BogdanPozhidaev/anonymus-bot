@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"log/slog"
 	"os"
 	"time"
 
+	"github.com/fastcheck/anonymus_bot/backend/internal/config"
 	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
@@ -24,36 +24,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		logger.Error("DATABASE_URL is not set")
-		os.Exit(1)
-	}
-
-	photosDir := os.Getenv("PHOTOS_DIR")
-	if photosDir == "" {
-		logger.Error("PHOTOS_DIR is not set")
-		os.Exit(1)
-	}
-
-	voiceDir := os.Getenv("VOICE_DIR")
-	if voiceDir == "" {
-		logger.Error("VOICE_DIR is not set")
-		os.Exit(1)
-	}
-
-	encryptionKeyBase64 := os.Getenv("PII_ENCRYPTION_KEY")
-	if encryptionKeyBase64 == "" {
-		logger.Error("PII_ENCRYPTION_KEY is not set")
-		os.Exit(1)
-	}
-
-	encryptionKey, err := base64.StdEncoding.DecodeString(encryptionKeyBase64)
+	dbURL, err := config.DatabaseURL()
 	if err != nil {
-		logger.Error("failed to decode PII_ENCRYPTION_KEY", "error", err)
+		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-
+	photosDir, voiceDir, encryptionKey, err := config.MediaSettings()
+	if err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	encryptor, err := crypto.NewEncryptor(encryptionKey)
 	if err != nil {
 		logger.Error("failed to create encryptor", "error", err)
@@ -62,7 +42,7 @@ func main() {
 
 	pool, err := db.NewPool(ctx, dbURL)
 	if err != nil {
-		logger.Error("failed to connect to database", "error", err)
+		logger.Error("cannot connect to PostgreSQL; check database settings and availability")
 		os.Exit(1)
 	}
 	defer pool.Close()
@@ -112,7 +92,16 @@ func main() {
 		logger.Error("message cleanup error", "error", e)
 	}
 
+	requestCount, err := repository.NewIncomingRequestRepository(pool).PurgeBefore(
+		ctx, time.Now().Add(-config.PIIRetentionPeriod), *dryRun,
+	)
 	totalErrors := len(piiResult.Errors) + len(cleanupResult.Errors)
+	if err != nil {
+		totalErrors++
+		logger.Error("incoming request retention failed", "error", err)
+	} else {
+		logger.Info("incoming request retention complete", "records", requestCount, "dry_run", *dryRun)
+	}
 	if totalErrors > 0 {
 		logger.Warn("retention run completed with errors", "total_errors", totalErrors)
 		os.Exit(1)

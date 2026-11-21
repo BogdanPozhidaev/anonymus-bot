@@ -10,6 +10,7 @@ import {
 
 import { useAuthStore } from '../../stores/authStore';
 import { logout as logoutRequest } from '../../api/auth';
+import { panelConfig } from '../../panelConfig';
 
 export function AppShell() {
   const navigate = useNavigate();
@@ -30,10 +31,10 @@ export function AppShell() {
   const navItems = [
     { path: '/sessions', label: 'Сессии', icon: IconMessageCircle },
     { path: '/incoming-requests', label: 'Входящие обращения', icon: IconInbox },
-    { path: '/audit-log', label: 'Аудит', icon: IconHistory },
   ];
 
   if (role === 'admin') {
+    navItems.push({ path: '/audit-log', label: 'Аудит', icon: IconHistory });
     navItems.push({ path: '/operators', label: 'Операторы', icon: IconUsers });
   }
 
@@ -41,7 +42,7 @@ export function AppShell() {
     <MantineAppShell navbar={{ width: 260, breakpoint: 'sm' }} padding="md">
       <MantineAppShell.Navbar p="md">
         <Text fw={700} size="lg" mb="md">
-          Панель Посредника
+          {panelConfig().productName}
         </Text>
         {navItems.map((item) => (
           <NavLink

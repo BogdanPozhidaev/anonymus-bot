@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -28,16 +31,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	bot, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
+	telegramHTTP := &http.Client{Timeout: 35 * time.Second}
+	bot, err := tgbotapi.NewBotAPIWithClient(cfg.TelegramBotToken, tgbotapi.APIEndpoint, telegramHTTP)
 	if err != nil {
-		logger.Error("failed to create bot", "error", err)
+		logger.Error("cannot initialize Telegram bot; check token and connectivity")
 		os.Exit(1)
 	}
 
 	logger.Info("bot authorized", "username", bot.Self.UserName)
 
-	backend := backendclient.New(cfg.BackendURL)
-	startHandler := handlers.NewStartHandler(bot, backend, cfg.PhotosDir, cfg.VoiceDir, logger)
+	backend := backendclient.New(cfg.BackendURL, cfg.InternalAPIToken)
+	startHandler := handlers.NewStartHandler(bot, backend, logger)
 	helpHandler := handlers.NewHelpHandler(bot, logger)
 	languageHandler := handlers.NewLanguageHandler(bot, backend, logger)
 	operatorHandler := handlers.NewOperatorHandler(bot, backend, logger)
@@ -49,12 +53,17 @@ func main() {
 	stopHandler := handlers.NewStopHandler(bot, backend, logger)
 	alertCallbackHandler := handlers.NewAlertCallbackHandler(bot, backend, cfg.PanelBaseURL, logger)
 
-	ctx := context.Background()
-
-	internalServer := server.New(bot, cfg.OperatorGroupChatID, logger)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	internalCtx, stopInternal := context.WithCancel(context.Background())
+	defer stopInternal()
+	internalServer := server.New(bot, cfg.OperatorGroupChatID, logger, cfg.BotInternalToken, cfg.PhotosDir, cfg.VoiceDir, cfg.PanelBaseURL)
+	internalDone := make(chan struct{})
 	go func() {
-		if err := internalServer.Start(ctx, ":9090"); err != nil && err != http.ErrServerClosed {
+		defer close(internalDone)
+		if err := internalServer.Start(internalCtx, ":9090"); err != nil && err != http.ErrServerClosed {
 			logger.Error("internal server failed", "error", err)
+			stopSignals()
 		}
 	}()
 
@@ -65,6 +74,8 @@ func main() {
 				languageHandler.HandleCallback(ctx, update.CallbackQuery)
 			case strings.HasPrefix(update.CallbackQuery.Data, "switch_session:"):
 				sessionsListHandler.HandleSwitchCallback(ctx, update.CallbackQuery)
+			case strings.HasPrefix(update.CallbackQuery.Data, "sessions_page:"):
+				sessionsListHandler.HandlePageCallback(ctx, update.CallbackQuery)
 			case strings.HasPrefix(update.CallbackQuery.Data, "open_session:"),
 				strings.HasPrefix(update.CallbackQuery.Data, "take_request:"),
 				strings.HasPrefix(update.CallbackQuery.Data, "close_session:"):
@@ -74,7 +85,7 @@ func main() {
 			default:
 				callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
 				if _, err := bot.Request(callbackConfig); err != nil {
-					logger.Error("failed to answer callback", "error", err)
+					logger.Error("failed to answer callback")
 				}
 			}
 			return
@@ -124,16 +135,15 @@ func main() {
 			return
 		}
 
-		logger.Info("received unsupported message type", "chat_id", update.Message.Chat.ID)
+		logger.Info("received unsupported message type")
 	}
-
-	updateConfig := tgbotapi.NewUpdate(0)
-	updateConfig.Timeout = 30
-
-	updates := bot.GetUpdatesChan(updateConfig)
 
 	logger.Info("bot started, listening for updates", "concurrency", updateConcurrency)
 
 	d := dispatcher.New(handleUpdate, updateConcurrency, logger)
-	d.Run(ctx, updates)
+	pollBot := *bot
+	pollBot.Client = pollingHTTPClient{ctx: ctx, client: telegramHTTP}
+	pollUpdates(ctx, &pollBot, d, logger)
+	stopInternal()
+	<-internalDone
 }

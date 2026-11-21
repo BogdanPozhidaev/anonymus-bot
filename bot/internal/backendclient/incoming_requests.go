@@ -33,14 +33,16 @@ func (c *Client) CreateIncomingRequest(ctx context.Context, req CreateIncomingRe
 	return &resp, nil
 }
 
-func (c *Client) ListIncomingRequestsInternal(ctx context.Context) ([]IncomingRequestInternalItem, error) {
+func (c *Client) ListIncomingRequestsInternal(ctx context.Context, offset int) ([]IncomingRequestInternalItem, bool, error) {
 	var resp struct {
 		Requests []IncomingRequestInternalItem `json:"requests"`
+		HasMore  bool                          `json:"has_more"`
 	}
-	if err := c.doRequest(ctx, "GET", "/internal/incoming-requests", nil, &resp); err != nil {
-		return nil, err
+	path := fmt.Sprintf("/internal/incoming-requests?limit=%d&offset=%d", MenuPageSize, offset)
+	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, false, err
 	}
-	return resp.Requests, nil
+	return resp.Requests, resp.HasMore, nil
 }
 
 func (c *Client) MarkIncomingRequestProcessed(ctx context.Context, requestID int64) error {

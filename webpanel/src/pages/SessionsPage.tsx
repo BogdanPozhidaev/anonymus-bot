@@ -13,8 +13,10 @@ import {
   Loader,
   Text,
   ActionIcon,
+  Select,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
+import { useDebouncedValue } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconExternalLink } from '@tabler/icons-react';
 
@@ -34,16 +36,22 @@ const statusLabels: Record<SessionStatus, string> = {
   pending_close: 'Ожидает закрытия',
   closed: 'Закрыта',
 };
+const pageSize = 50;
 
 export function SessionsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
-  const { data: sessions, isLoading, error } = useQuery({
-    queryKey: ['sessions'],
-    queryFn: listSessions,
+  const [search, setSearch] = useState('');
+  const [query] = useDebouncedValue(search, 250);
+  const [status, setStatus] = useState<SessionStatus | undefined>();
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['sessions', query, status, offset],
+    queryFn: () => listSessions({ q: query, status, limit: pageSize, offset }),
   });
+  const sessions = data?.sessions;
 
   const createForm = useForm({
     initialValues: { title: '' },
@@ -63,14 +71,6 @@ export function SessionsPage() {
     },
   });
 
-  if (isLoading) {
-    return <Loader />;
-  }
-
-  if (error) {
-    return <Text c="red">Не удалось загрузить список сессий</Text>;
-  }
-
   return (
     <>
       <Group justify="space-between" mb="md">
@@ -80,6 +80,18 @@ export function SessionsPage() {
         </Button>
       </Group>
 
+      <Group mb="md">
+        <TextInput label="Поиск по названию или ID" value={search} maxLength={80} onChange={(event) => {
+          setSearch(event.currentTarget.value);
+          setOffset(0);
+        }} />
+        <Select label="Статус" clearable value={status ?? null} onChange={(value) => {
+          setStatus(value === null ? undefined : value as SessionStatus);
+          setOffset(0);
+        }} data={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))} />
+      </Group>
+      {isLoading && <Loader />}
+      {error && <Text c="red">Не удалось загрузить список сессий</Text>}
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
@@ -114,6 +126,12 @@ export function SessionsPage() {
           ))}
         </Table.Tbody>
       </Table>
+      {(offset > 0 || data?.has_more) && (
+        <Group justify="end" mt="md">
+          <Button variant="default" disabled={isLoading || offset === 0} onClick={() => setOffset(offset - pageSize)}>Назад</Button>
+          <Button variant="default" disabled={isLoading || !data?.has_more} onClick={() => setOffset(offset + pageSize)}>Вперёд</Button>
+        </Group>
+      )}
 
       {sessions?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">

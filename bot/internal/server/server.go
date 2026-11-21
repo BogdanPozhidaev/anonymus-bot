@@ -2,15 +2,22 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/google/uuid"
 )
 
 type SendMessageRequest struct {
+	ContentType         string `json:"content_type"`
+	FileID              string `json:"file_id"`
 	RecipientTelegramID int64  `json:"recipient_telegram_id"`
 	SenderLabel         string `json:"sender_label"`
 	Text                string `json:"text"`
@@ -27,33 +34,68 @@ type SendAlertRequest struct {
 	Buttons []AlertButton `json:"buttons,omitempty"`
 }
 
+type messageSender interface {
+	Send(tgbotapi.Chattable) (tgbotapi.Message, error)
+}
+
 type Server struct {
-	bot             *tgbotapi.BotAPI
-	operatorGroupID int64
-	logger          *slog.Logger
+	bot                 messageSender
+	operatorGroupID     int64
+	logger              *slog.Logger
+	internalToken       string
+	photosDir, voiceDir string
+	panelBaseURL        string
 }
 
-func New(bot *tgbotapi.BotAPI, operatorGroupID int64, logger *slog.Logger) *Server {
-	return &Server{bot: bot, operatorGroupID: operatorGroupID, logger: logger}
+func New(bot messageSender, operatorGroupID int64, logger *slog.Logger, internalToken, photosDir, voiceDir, panelBaseURL string) *Server {
+	return &Server{bot: bot, operatorGroupID: operatorGroupID, logger: logger, internalToken: internalToken, photosDir: photosDir, voiceDir: voiceDir, panelBaseURL: panelBaseURL}
 }
 
-func (s *Server) Start(ctx context.Context, addr string) error {
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/send-message", s.handleSendMessage)
 	mux.HandleFunc("POST /internal/send-alert", s.handleSendAlert)
+	expected := []byte(s.internalToken)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		values := r.Header.Values("X-Internal-Token")
+		r.Header.Del("X-Internal-Token")
+		if len(expected) != 64 || len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), expected) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
 
+func (s *Server) Start(ctx context.Context, addr string) error {
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           s.handler(),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	listen := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		_ = srv.Close()
+		listen <- srv.ListenAndServe()
 	}()
 
 	s.logger.Info("bot internal server starting", "addr", addr)
-	return srv.ListenAndServe()
+	select {
+	case err := <-listen:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			_ = srv.Close()
+			return err
+		}
+		return <-listen
+	}
 }
 
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -63,21 +105,52 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullText := req.SenderLabel + " " + req.Text
-
-	msg := tgbotapi.NewMessage(req.RecipientTelegramID, fullText)
-
+	var keyboard any
 	if req.SessionID > 0 {
-		callbackData := "switch_session:" + strconv.FormatInt(req.SessionID, 10)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", callbackData),
-			),
-		)
+		keyboard = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", "switch_session:"+strconv.FormatInt(req.SessionID, 10)),
+		))
+	}
+	var msg tgbotapi.Chattable
+	switch req.ContentType {
+	case "", "text":
+		body := req.Text
+		if req.SenderLabel != "" {
+			body = req.SenderLabel + " " + body
+		}
+		text := tgbotapi.NewMessage(req.RecipientTelegramID, body)
+		text.ReplyMarkup = keyboard
+		msg = text
+	case "photo", "voice":
+		id, err := uuid.Parse(req.FileID)
+		if err != nil || id == uuid.Nil || id.String() != req.FileID {
+			http.Error(w, "invalid media file id", http.StatusBadRequest)
+			return
+		}
+		if req.ContentType == "photo" {
+			photo := tgbotapi.NewPhoto(req.RecipientTelegramID, tgbotapi.FilePath(filepath.Join(s.photosDir, req.FileID+".jpg")))
+			photo.Caption = req.SenderLabel
+			if req.Text != "" {
+				photo.Caption = req.Text
+			}
+			photo.ReplyMarkup = keyboard
+			msg = photo
+		} else {
+			voice := tgbotapi.NewVoice(req.RecipientTelegramID, tgbotapi.FilePath(filepath.Join(s.voiceDir, req.FileID+".ogg")))
+			voice.Caption = req.SenderLabel
+			if req.Text != "" {
+				voice.Caption = req.Text
+			}
+			voice.ReplyMarkup = keyboard
+			msg = voice
+		}
+	default:
+		http.Error(w, "invalid content type", http.StatusBadRequest)
+		return
 	}
 
 	if _, err := s.bot.Send(msg); err != nil {
-		s.logger.Error("failed to send operator message", "error", err, "recipient_telegram_id", req.RecipientTelegramID)
+		s.logger.Error("Telegram delivery failed")
 		http.Error(w, "failed to send message", http.StatusInternalServerError)
 		return
 	}
@@ -97,13 +170,19 @@ func (s *Server) handleSendAlert(w http.ResponseWriter, r *http.Request) {
 	if len(req.Buttons) > 0 {
 		var row []tgbotapi.InlineKeyboardButton
 		for _, b := range req.Buttons {
-			row = append(row, tgbotapi.NewInlineKeyboardButtonData(b.Label, b.CallbackData))
+			action, rawID, _ := strings.Cut(b.CallbackData, ":")
+			id, err := strconv.ParseInt(rawID, 10, 64)
+			if strings.HasPrefix(s.panelBaseURL, "https://") && err == nil && id > 0 && (action == "open_session" || action == "close_session") {
+				row = append(row, tgbotapi.NewInlineKeyboardButtonURL(b.Label, s.panelBaseURL+"/sessions/"+strconv.FormatInt(id, 10)))
+			} else {
+				row = append(row, tgbotapi.NewInlineKeyboardButtonData(b.Label, b.CallbackData))
+			}
 		}
 		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(row)
 	}
 
 	if _, err := s.bot.Send(msg); err != nil {
-		s.logger.Error("failed to send alert to operator group", "error", err)
+		s.logger.Error("failed to send alert to operator group")
 		http.Error(w, "failed to send alert", http.StatusInternalServerError)
 		return
 	}

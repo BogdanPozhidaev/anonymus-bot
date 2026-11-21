@@ -11,15 +11,20 @@ import (
 )
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL       string
+	internalToken string
+	httpClient    *http.Client
 }
 
-func New(baseURL string) *Client {
+func New(baseURL, internalToken string) *Client {
 	return &Client{
-		baseURL: baseURL,
+		baseURL:       baseURL,
+		internalToken: internalToken,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
@@ -43,6 +48,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set("X-Internal-Token", c.internalToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -54,6 +60,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotFound
+	}
+
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("unexpected backend redirect: status %d", resp.StatusCode)
 	}
 
 	if resp.StatusCode >= 400 {

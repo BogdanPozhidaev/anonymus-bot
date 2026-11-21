@@ -8,6 +8,7 @@ import (
 type AuditLog struct {
 	ID         int64           `db:"id" json:"id"`
 	Timestamp  time.Time       `db:"timestamp" json:"timestamp"`
+	ActorType  string          `db:"actor_type" json:"actor_type"`
 	ActorID    *int64          `db:"actor_id" json:"actor_id"`
 	ActorRole  *string         `db:"actor_role" json:"actor_role"`
 	Action     string          `db:"action" json:"action"`

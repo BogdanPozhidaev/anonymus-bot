@@ -1,0 +1,161 @@
+contact	contact demo@example.invalid
+contact	пишите fixture.ops@example.invalid
+contact	email: demo+case@example.test
+contact	BOX@EXAMPLE.INVALID
+contact	reply to demo_box@dept.example.invalid
+contact	demo [at] example [dot] invalid
+contact	demo (at) example (dot) invalid
+contact	demo @ example . invalid
+contact	ｄｅｍｏ＠ｅｘａｍｐｌｅ．ｉｎｖａｌｉｄ
+contact	demo@​example.invalid
+contact	demo@sample.invalid, please
+contact	доступ по demo-test@fixture.invalid
+contact	test_01@example.invalid
+contact	mail at demo%trial@example.invalid
+contact	demo@example.invalid; later
+contact	t.me/fixture_quartz
+contact	https://telegram.me/fixture_quartz
+contact	http://wa.me/12025550123
+contact	https://signal.me/#fixture
+contact	https://signal.org/example
+contact	viber.com/fixture
+contact	WHATSAPP.COM/send?phone=12025550123
+contact	t [dot] me/fixture
+contact	t . me/fixture
+contact	ｔ．ｍｅ/fixture
+contact	https://t.​me/fixture
+contact	see wa.me/fixture please
+contact	открывай telegram.me/fixture
+contact	signal [dot] org/example
+contact	https://whatsapp.com/channel/fixture
+contact	@fixture_quartz
+contact	пиши @fixture_north
+contact	hey (@fixture_south)
+contact	use @fixture_east.
+contact	＠fixture_west
+contact	@fix​ture_orchid
+contact	@fixture_emerald, later
+contact	@fixture_amber и только так
+contact	find @fixture_cobalt
+contact	telegram: @fixture_dusk
+contact	@fixture_ocean — новый контакт
+contact	+1 (202) 555-0101
+contact	Call +12025550102
+contact	телефон +7 (000) 555-01-03
+contact	+44 7700 900104
+contact	+1-202-555-0105
+contact	8-000-555-01-06
+contact	7 000 555 01 07
+contact	80005550108
+contact	(202) 555-0109
+contact	reach ＋１ ２０２ ５５５ ０１１０
+contact	tel: +1 202.555.0111
+contact	пишите +7(000)555-01-12
+contact	+447700900113
+contact	тел +7 000 555 01 14
+contact	это +1 202-555-0115, да
+contact	созвонимся
+contact	Давай, напрямую
+contact	скинь номер пожалуйста
+contact	вот мой номер, записывай
+contact	Напиши мне в чат вне сервиса
+contact	переходи в личку
+contact	Давайте напрямую завтра
+contact	скиньте контакт
+contact	пиши в личку
+contact	соз​вонимся завтра
+contact	напиши в телеграм
+contact	напиши в вотсап
+contact	напишите мне в мессенджере
+contact	мой номер телефона могу дать
+contact	добавь меня в группу
+contact	contact me directly tomorrow
+contact	TEXT ME ON WHATSAPP
+contact	message-me-on-telegram
+contact	Send me your number please
+contact	here is my phone number
+contact	let's talk off platform
+contact	CONTACT​ ME DIRECTLY
+contact	send   me your number
+contact	h e r e is my phone number
+contact	reach me at demo at example dot invalid
+allowed	Заказ 123456
+allowed	Заказ 1234567
+allowed	Артикул 12345678
+allowed	Счёт 123456789
+allowed	Order 1234567890
+allowed	Batch 12345678901
+allowed	Request 123456789012
+allowed	Проект XR1234567890
+allowed	ИНН 500123456789
+allowed	Поставка 2026-11-21
+allowed	Встреча в 12:30 после доставки
+allowed	Сумма 600000 и доставка 5000
+allowed	Order REF-2026-00042
+allowed	Courier will arrive in 10 minutes
+allowed	Expected date is 2026.11.21
+allowed	Job #20987654 is ready
+allowed	SKU A1500199B
+allowed	Page 555-0100 is missing
+allowed	Версия 2.14.456789
+allowed	Регистрация 20261121 прошла
+allowed	Coordinate 55.7500, 37.6200
+allowed	Size A4 210 x 297 mm
+allowed	строка 002020001234
+allowed	Reference is X80005550108A
+allowed	ID 80005550108
+allowed	Tracking 3181228627
+allowed	Здравствуйте, заказ принят
+allowed	Спасибо за помощь
+allowed	Please update the status in the panel
+allowed	See you next week
+allowed	Можно отправить фото здесь
+allowed	Запишем обращение в системе
+allowed	Can we discuss the delivery here?
+allowed	Приложение загружено
+allowed	Сообщение в панели доступно
+allowed	Голосовое пришло, спасибо
+allowed	Контакты нельзя раскрывать
+allowed	Do not share any phone numbers
+allowed	Особых пожеланий нет
+allowed	Можем согласовать сроки
+allowed	We will remain on the platform
+allowed	This is an internal conversation
+allowed	Оплата только через сервис
+allowed	Сессия активна
+allowed	Прочитайте нашу политику
+allowed	The file was scanned locally
+allowed	Some content may be hidden
+allowed	Нет новых заявок
+allowed	Сохраните номер заказа
+allowed	Search by session ID
+allowed	help@example is missing its suffix
+allowed	домен example.invalid без адреса
+allowed	https://example.invalid/help
+allowed	site wa.me without a recipient
+allowed	signal is working
+allowed	use @ok for the annotation
+allowed	label @AB in the sample
+allowed	Prices are 3 @ 5
+allowed	Question about APIs @ v1
+allowed	alice at example dot invalid is grammar test
+allowed	dot and at are words here
+allowed	alice@example.invalid is quoted in the rule
+allowed	Why does the policy say contact me directly is prohibited?
+allowed	Что означает слово созвонимся в примере?
+allowed	Тема: без посредников, пример в учебнике
+allowed	Meaning of contactless payment
+allowed	phone numbers are optional in the form
+allowed	Operators can sign in with TOTP
+allowed	Панель отображает заявки
+allowed	Сегодня пятница, доставка завтра
+allowed	Thank you for the feedback
+allowed	Проверим ещё раз через час
+allowed	I added a note in the ticket
+allowed	Сессия приостановлена по запросу
+allowed	Данные доступны до окончания хранения
+allowed	Тестовый шаблон +123 is short
+allowed	Стоимость 7 920 евро
+allowed	Please use the built-in reply button
+allowed	Проверка даты и времени завершена
+allowed	Не отправляйте личную информацию

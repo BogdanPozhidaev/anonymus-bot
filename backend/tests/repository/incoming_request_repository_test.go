@@ -2,11 +2,71 @@ package repository_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 )
+
+func TestIncomingRequestReuseAndCooldown(t *testing.T) {
+	pool := setupTestDB(t)
+	requests := repository.NewIncomingRequestRepository(pool)
+	ctx := context.Background()
+	const telegramID = 6601
+	ids := make(chan int64, 12)
+	var wg sync.WaitGroup
+	var inserted atomic.Int32
+	for range cap(ids) {
+		wg.Go(func() {
+			ir := models.IncomingRequest{TelegramID: telegramID}
+			created, err := requests.CreateOrReuse(ctx, &ir)
+			if err != nil {
+				t.Errorf("upsert: %v", err)
+				return
+			}
+			if created {
+				inserted.Add(1)
+			}
+			ids <- ir.ID
+		})
+	}
+	wg.Wait()
+	close(ids)
+	first := <-ids
+	if first == 0 || inserted.Load() != 1 {
+		t.Fatal("concurrent duplicates did not collapse into one request")
+	}
+	for id := range ids {
+		if first != id {
+			t.Fatal("inconsistent request ID for repeated submission")
+		}
+	}
+	for _, text := range []string{"first fixture", "later fixture"} {
+		ir := models.IncomingRequest{TelegramID: telegramID, FirstMessageText: &text}
+		if created, err := requests.CreateOrReuse(ctx, &ir); err != nil || created || ir.ID != first {
+			t.Fatalf("could not reuse open request: %v", err)
+		}
+	}
+	stored, err := requests.GetByID(ctx, first)
+	if err != nil || stored.FirstMessageText == nil || *stored.FirstMessageText != "first fixture" {
+		t.Fatal("later updates overwrote the first message")
+	}
+	if err := requests.UpdateStatus(ctx, first, "processed"); err != nil {
+		t.Fatal(err)
+	}
+	ir := models.IncomingRequest{TelegramID: telegramID}
+	if created, err := requests.CreateOrReuse(ctx, &ir); err != nil || created || ir.ID != first {
+		t.Fatalf("recent processed request bypassed cooldown: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE incoming_requests SET created_at=now()-interval '11 minutes' WHERE id=$1", first); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := requests.CreateOrReuse(ctx, &ir); err != nil || !created || ir.ID == first {
+		t.Fatalf("request was not accepted after cooldown: %v", err)
+	}
+}
 
 func TestIncomingRequestRepository_CreateAndGetByID(t *testing.T) {
 	pool := setupTestDB(t)

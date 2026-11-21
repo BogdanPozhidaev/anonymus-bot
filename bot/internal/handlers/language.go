@@ -35,7 +35,7 @@ func (h *LanguageHandler) HandleCommand(message *tgbotapi.Message) {
 	msg.ReplyMarkup = keyboard
 
 	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to send language selection", "error", err, "chat_id", message.Chat.ID)
+		h.logger.Error("failed to send language selection")
 	}
 }
 
@@ -53,7 +53,7 @@ func (h *LanguageHandler) HandleCallback(ctx context.Context, callback *tgbotapi
 
 	callbackConfig := tgbotapi.NewCallback(callback.ID, "")
 	if _, err := h.bot.Request(callbackConfig); err != nil {
-		h.logger.Error("failed to answer callback", "error", err)
+		h.logger.Error("failed to answer callback")
 	}
 
 	confirmText := "Язык изменён на русский"
@@ -63,6 +63,6 @@ func (h *LanguageHandler) HandleCallback(ctx context.Context, callback *tgbotapi
 
 	edit := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, callback.Message.MessageID, confirmText)
 	if _, err := h.bot.Send(edit); err != nil {
-		h.logger.Error("failed to edit message", "error", err)
+		h.logger.Error("failed to edit message")
 	}
 }

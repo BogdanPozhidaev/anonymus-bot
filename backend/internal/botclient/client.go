@@ -10,6 +10,8 @@ import (
 )
 
 type SendMessageRequest struct {
+	ContentType         string `json:"content_type,omitempty"`
+	FileID              string `json:"file_id,omitempty"`
 	RecipientTelegramID int64  `json:"recipient_telegram_id"`
 	SenderLabel         string `json:"sender_label"`
 	Text                string `json:"text"`
@@ -17,8 +19,9 @@ type SendMessageRequest struct {
 }
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL       string
+	internalToken string
+	httpClient    *http.Client
 }
 
 type SendAlertRequest struct {
@@ -31,10 +34,16 @@ type AlertButton struct {
 	CallbackData string `json:"callback_data"`
 }
 
-func New(baseURL string) *Client {
+func New(baseURL, internalToken string) *Client {
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		baseURL:       baseURL,
+		internalToken: internalToken,
+		httpClient: &http.Client{
+			Timeout: 45 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -49,6 +58,7 @@ func (c *Client) SendMessage(ctx context.Context, req SendMessageRequest) error 
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Token", c.internalToken)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -66,6 +76,8 @@ func (c *Client) SendMessage(ctx context.Context, req SendMessageRequest) error 
 }
 
 func (c *Client) SendAlert(ctx context.Context, req SendAlertRequest) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal alert request: %w", err)
@@ -76,6 +88,7 @@ func (c *Client) SendAlert(ctx context.Context, req SendAlertRequest) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Token", c.internalToken)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

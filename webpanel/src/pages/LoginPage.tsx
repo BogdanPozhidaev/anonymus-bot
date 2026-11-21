@@ -4,11 +4,25 @@ import { TextInput, PasswordInput, Button, Paper, Title, Stack, Text, Image, Ale
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import QRCode from 'qrcode';
+import { isAxiosError } from 'axios';
 
 import { login, verifyTotp } from '../api/auth';
 import { useAuthStore } from '../stores/authStore';
+import { panelConfig } from '../panelConfig';
 
 type Step = 'credentials' | 'totp' | 'totp_setup';
+
+function authErrorMessage(error: unknown, fallback: string) {
+  if (!isAxiosError(error)) return fallback;
+  if (error.response?.status === 429) {
+    const seconds = Number(error.response.headers['retry-after']);
+    return Number.isFinite(seconds) && seconds > 0
+      ? `Слишком много попыток. Повторите вход через ${seconds} сек.`
+      : 'Слишком много попыток. Повторите вход позже.';
+  }
+  if (error.response?.status === 503) return 'Вход временно недоступен. Попробуйте позже.';
+  return fallback;
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -52,7 +66,7 @@ export function LoginPage() {
         setStep('totp');
       }
     } catch (err) {
-      setError('Неверный логин или пароль');
+      setError(authErrorMessage(err, 'Неверный логин или пароль'));
     } finally {
       setLoading(false);
     }
@@ -68,7 +82,7 @@ export function LoginPage() {
       notifications.show({ message: 'Вход выполнен', color: 'green' });
       navigate('/sessions');
     } catch (err) {
-      setError('Неверный код подтверждения');
+      setError(authErrorMessage(err, 'Неверный код подтверждения'));
     } finally {
       setLoading(false);
     }
@@ -77,7 +91,7 @@ export function LoginPage() {
   return (
     <Paper radius="md" p="xl" withBorder maw={420} mx="auto" mt={100}>
       <Title order={2} ta="center" mb="md">
-        Панель Посредника
+         {panelConfig().productName}
       </Title>
 
       {error && (

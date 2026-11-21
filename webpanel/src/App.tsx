@@ -19,9 +19,9 @@ function App() {
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/sessions/:id" element={<SessionDetailPage />} />
           <Route path="/incoming-requests" element={<IncomingRequestsPage />} />
-          <Route path="/audit-log" element={<AuditLogPage />} />
 
           <Route element={<ProtectedRoute adminOnly />}>
+            <Route path="/audit-log" element={<AuditLogPage />} />
             <Route path="/operators" element={<OperatorsPage />} />
           </Route>
         </Route>

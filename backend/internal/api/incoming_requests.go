@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,7 +36,7 @@ type incomingRequestListItem struct {
 func (s *Server) handleCreateIncomingRequest(c *gin.Context) {
 	var req createIncomingRequestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -48,32 +50,36 @@ func (s *Server) handleCreateIncomingRequest(c *gin.Context) {
 	if req.FirstName != "" {
 		ir.FirstName = &req.FirstName
 	}
-	if req.FirstMessageText != "" {
+	if strings.TrimSpace(req.FirstMessageText) != "" {
 		ir.FirstMessageText = &req.FirstMessageText
 	}
 	if req.LanguageCode != "" {
 		ir.LanguageCode = &req.LanguageCode
 	}
 
-	if err := s.incomingRequestRepo.Create(c.Request.Context(), ir); err != nil {
+	created, err := s.incomingRequestRepo.CreateOrReuse(c.Request.Context(), ir)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create incoming request"})
 		return
 	}
 
-	s.sendIncomingRequestAlert(c.Request.Context(), ir)
-
-	c.JSON(http.StatusCreated, gin.H{"id": ir.ID})
+	if created {
+		s.sendIncomingRequestAlert(c.Request.Context(), ir)
+		c.JSON(http.StatusCreated, gin.H{"id": ir.ID})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": ir.ID})
 }
 
 func (s *Server) sendIncomingRequestAlert(ctx context.Context, ir *models.IncomingRequest) {
 	name := "Без имени"
 	if ir.FirstName != nil {
-		name = *ir.FirstName
+		name = alertExcerpt(*ir.FirstName, 200)
 	}
 
 	text := fmt.Sprintf("📩 Новое обращение от %s", name)
 	if ir.FirstMessageText != nil {
-		text += fmt.Sprintf("\n\"%s\"", *ir.FirstMessageText)
+		text += fmt.Sprintf("\n\"%s\"", alertExcerpt(*ir.FirstMessageText, 3500))
 	}
 
 	err := s.botClient.SendAlert(ctx, botclient.SendAlertRequest{
@@ -87,7 +93,33 @@ func (s *Server) sendIncomingRequestAlert(ctx context.Context, ir *models.Incomi
 	}
 }
 
+func alertExcerpt(value string, limit int) string {
+	used := 0
+	for offset, r := range value {
+		used += utf16.RuneLen(r)
+		if used >= limit {
+			return value[:offset] + "…"
+		}
+	}
+	return value
+}
+
+// handleListIncomingRequests godoc
+// @Summary      List incoming requests
+// @Tags         incoming-requests
+// @Produce      json
+// @Security     BearerAuth
+// @Param        status query string false "Request status (new or processed)"
+// @Param        limit query int false "Page size (1–200, default 50)"
+// @Param        offset query int false "Number of requests to skip"
+// @Success      200 {object} map[string]interface{}
+// @Failure      400 {object} map[string]string
+// @Router       /api/incoming-requests [get]
 func (s *Server) handleListIncomingRequests(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	status := c.Query("status")
 	if status == "" {
 		status = models.IncomingRequestStatusNew
@@ -95,12 +127,13 @@ func (s *Server) handleListIncomingRequests(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	requests, err := s.incomingRequestRepo.ListByStatus(ctx, status)
+	requests, err := s.incomingRequestRepo.ListByStatusPage(ctx, status, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list incoming requests"})
 		return
 	}
 
+	requests, hasMore := trimPage(requests, page.Limit)
 	items := make([]incomingRequestListItem, 0, len(requests))
 	for _, r := range requests {
 		items = append(items, incomingRequestListItem{
@@ -115,7 +148,7 @@ func (s *Server) handleListIncomingRequests(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"requests": items})
+	c.JSON(http.StatusOK, gin.H{"requests": items, "has_more": hasMore})
 }
 
 type updateIncomingRequestStatusRequest struct {
@@ -131,7 +164,7 @@ func (s *Server) handleUpdateIncomingRequestStatus(c *gin.Context) {
 
 	var req updateIncomingRequestStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -142,6 +175,8 @@ func (s *Server) handleUpdateIncomingRequestStatus(c *gin.Context) {
 		return
 	}
 
+	operatorID, _ := getOperatorID(c)
+	s.writeAuditLog(c, operatorID, "operator", "incoming_request_status_updated", "incoming_request", requestID, gin.H{"status": req.Status})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -157,13 +192,18 @@ func (s *Server) handleMarkIncomingRequestProcessedInternal(c *gin.Context) {
 		return
 	}
 
+	s.writeAuditLog(c, 0, "system", "incoming_request_status_updated", "incoming_request", requestID, gin.H{"status": models.IncomingRequestStatusProcessed})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (s *Server) handleListIncomingRequestsInternal(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
-	requests, err := s.incomingRequestRepo.ListByStatus(ctx, models.IncomingRequestStatusNew)
+	requests, err := s.incomingRequestRepo.ListByStatusPage(ctx, models.IncomingRequestStatusNew, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list incoming requests"})
 		return
@@ -175,6 +215,7 @@ func (s *Server) handleListIncomingRequestsInternal(c *gin.Context) {
 		FirstMessageText string `json:"first_message_text"`
 	}
 
+	requests, hasMore := trimPage(requests, page.Limit)
 	items := make([]item, 0, len(requests))
 	for _, r := range requests {
 		i := item{ID: r.ID}
@@ -187,5 +228,5 @@ func (s *Server) handleListIncomingRequestsInternal(c *gin.Context) {
 		items = append(items, i)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"requests": items})
+	c.JSON(http.StatusOK, gin.H{"requests": items, "has_more": hasMore})
 }

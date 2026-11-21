@@ -1,0 +1,7 @@
+services:
+  nginx:
+    ports: !override
+      - "${PANEL_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/tls.conf:/etc/nginx/anonymus-tls/panel.conf:ro
+      - "${TLS_CERT_DIR:?Set TLS_CERT_DIR to the certificate directory}:/etc/nginx/certs:ro"

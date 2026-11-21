@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -21,6 +20,9 @@ func NewMessageRelayHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client,
 }
 
 func (h *MessageRelayHandler) HandleText(ctx context.Context, message *tgbotapi.Message) {
+	if message.From == nil || message.Chat == nil || !message.Chat.IsPrivate() {
+		return
+	}
 	req := backendclient.RelayMessageRequest{
 		SenderTelegramID: message.From.ID,
 		ContentType:      "text",
@@ -29,44 +31,31 @@ func (h *MessageRelayHandler) HandleText(ctx context.Context, message *tgbotapi.
 
 	resp, err := h.backend.RelayMessage(ctx, req)
 	if err != nil {
-		h.logger.Error("failed to relay message", "error", err, "chat_id", message.Chat.ID)
+		h.logger.Error("failed to relay message", "error", err)
 		h.sendErrorNotice(message.Chat.ID)
 		return
 	}
 
 	if resp.Blocked {
-		h.logger.Info("message blocked", "reason", resp.BlockReason, "chat_id", message.Chat.ID)
+		if resp.BlockReason == "no_active_session" {
+			_, err := h.backend.CreateIncomingRequest(ctx, backendclient.CreateIncomingRequestRequest{
+				TelegramID: message.From.ID, Username: message.From.UserName, FirstName: message.From.FirstName,
+				FirstMessageText: message.Text, LanguageCode: message.From.LanguageCode,
+			})
+			if err != nil {
+				h.logger.Error("failed to submit first message")
+				h.sendErrorNotice(message.Chat.ID)
+				return
+			}
+			h.sendMessage(message.Chat.ID, "Ваше обращение принято.")
+			return
+		}
+		h.logger.Info("message blocked", "reason", resp.BlockReason)
 		h.handleBlockedReason(message.Chat.ID, resp.BlockReason)
 		return
 	}
 
-	h.logger.Info("message relayed", "message_id", resp.MessageID, "chat_id", message.Chat.ID)
-	h.deliverToRecipient(resp.RecipientTelegramID, resp.SenderLabel, message.Text, resp.SessionID)
-}
-
-// deliverToRecipient отправляет копию сообщения получателю от имени бота.
-// Это НЕ forward — обычное новое сообщение, полностью отвязанное от оригинального
-// отправителя. Telegram API не передаёт сюда никаких метаданных исходного сообщения
-// (from, forward_from, reply_to), потому что мы формируем совершенно новый message
-// через NewMessage, а не пересылаем существующий через Forward.
-func (h *MessageRelayHandler) deliverToRecipient(recipientTelegramID int64, senderLabel, text string, sessionID int64) {
-	fullText := senderLabel + " " + text
-
-	msg := tgbotapi.NewMessage(recipientTelegramID, fullText)
-	msg.ReplyMarkup = replyHereKeyboard(sessionID)
-
-	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to deliver message to recipient", "error", err, "recipient_telegram_id", recipientTelegramID)
-	}
-}
-
-func replyHereKeyboard(sessionID int64) tgbotapi.InlineKeyboardMarkup {
-	callbackData := fmt.Sprintf("%s%d", switchSessionCallbackPrefix, sessionID)
-	return tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", callbackData),
-		),
-	)
+	h.logger.Info("message relayed", "message_id", resp.MessageID)
 }
 
 func (h *MessageRelayHandler) handleBlockedReason(chatID int64, reason string) {
@@ -80,6 +69,8 @@ func (h *MessageRelayHandler) handleBlockedReason(chatID int64, reason string) {
 		text = "Вторая сторона ещё не подключилась к сессии. Ваше сообщение будет доставлено, как только это произойдёт."
 	case "moderation_violation":
 		text = "Сообщение не отправлено: обмен личными контактами и прямые контакты в обход платформы запрещены правилами сервиса."
+	case "moderation_unavailable":
+		text = "Проверка сообщения недоступна. Попробуйте отправить его позже."
 	default:
 		text = "Сообщение не может быть доставлено."
 	}
@@ -94,6 +85,6 @@ func (h *MessageRelayHandler) sendErrorNotice(chatID int64) {
 func (h *MessageRelayHandler) sendMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if _, err := h.bot.Send(msg); err != nil {
-		h.logger.Error("failed to send message", "error", err, "chat_id", chatID)
+		h.logger.Error("failed to send message")
 	}
 }

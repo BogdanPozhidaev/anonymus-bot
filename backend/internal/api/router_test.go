@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewServerPreservesBotClientAndMediaDirs(t *testing.T) {
-	client := botclient.New("http://bot.invalid")
+	client := botclient.New("http://bot.invalid", "")
 	const photosDir = "test-media/photos"
 	const voiceDir = "test-media/voice"
 

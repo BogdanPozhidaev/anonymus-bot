@@ -17,6 +17,10 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
+const internalToken = open(__ENV.INTERNAL_API_TOKEN_FILE).trim();
+if (!/^[0-9a-fA-F]{64}$/.test(internalToken)) {
+  throw new Error('INTERNAL_API_TOKEN_FILE must contain a 64-character hex token');
+}
 
 export default function () {
   // __VU — номер виртуального пользователя (1..50), сопоставляем с seed-данными
@@ -29,7 +33,11 @@ export default function () {
   });
 
   const params = {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Internal-Token': internalToken,
+    },
+    redirects: 0,
   };
 
   const res = http.post(`${BASE_URL}/internal/messages/relay`, payload, params);

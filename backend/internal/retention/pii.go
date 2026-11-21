@@ -57,34 +57,30 @@ func (a *PIIAnonymizer) Run(ctx context.Context, dryRun bool) (*PIIAnonymizeResu
 
 	result := &PIIAnonymizeResult{}
 
+	seen := make(map[int64]bool)
 	for _, session := range sessions {
 		result.SessionsProcessed++
-
-		userIDs := collectParticipantIDs(session)
-
-		for _, userID := range userIDs {
-			user, err := a.userRepo.GetByID(ctx, userID)
-			if err != nil {
-				a.logger.Error("failed to get user for anonymization", "error", err, "user_id", userID, "session_id", session.ID)
-				result.Errors = append(result.Errors, fmt.Errorf("session %d, user %d: %w", session.ID, userID, err))
+		for _, userID := range collectParticipantIDs(session) {
+			if seen[userID] {
 				continue
 			}
-
-			// Пользователь уже анонимизирован ранее (например, участвовал
-			// в другой закрытой сессии, которую уже обработали) — пропускаем.
-			if user.TelegramID < 0 {
-				continue
-			}
-
+			seen[userID] = true
+			var changed bool
+			var err error
 			if dryRun {
-				a.logger.Info("[DRY RUN] would anonymize user", "user_id", userID, "session_id", session.ID)
-				result.UsersAnonymized++
+				changed, err = a.userRepo.CanAnonymizeUser(ctx, userID, threshold)
+			} else {
+				changed, err = a.userRepo.AnonymizeUser(ctx, userID, threshold)
+			}
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Errorf("user %d anonymization: %w", userID, err))
 				continue
 			}
-
-			if err := a.userRepo.AnonymizeUser(ctx, userID); err != nil {
-				a.logger.Error("failed to anonymize user", "error", err, "user_id", userID, "session_id", session.ID)
-				result.Errors = append(result.Errors, fmt.Errorf("session %d, user %d: %w", session.ID, userID, err))
+			if !changed {
+				continue
+			}
+			if dryRun {
+				result.UsersAnonymized++
 				continue
 			}
 

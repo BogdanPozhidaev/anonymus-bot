@@ -74,7 +74,7 @@ func hashValue(value string) string {
 // совпадает с указанным пользователем, и хэширует PII-поля в их payload.
 // Вызывается из PIIAnonymizer в момент анонимизации пользователя.
 func (h *AuditLogHasher) HashPIIForUser(ctx context.Context, userID int64) error {
-	entries, err := h.auditLogRepo.List(ctx, repository.AuditLogFilter{ActorID: &userID})
+	entries, err := h.auditLogRepo.List(ctx, repository.AuditLogFilter{RelatedUserID: &userID})
 	if err != nil {
 		return fmt.Errorf("failed to list audit log entries for user: %w", err)
 	}

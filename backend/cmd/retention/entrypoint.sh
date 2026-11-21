@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+case "$RETENTION_RUN_HOUR" in
+    0[0-9]|1[0-9]|2[0-3]) ;;
+    *) echo "RETENTION_RUN_HOUR must be a two-digit UTC hour (00–23)" >&2; exit 1 ;;
+esac
+
 echo "Retention cron started, running once per day at configured hour"
 
 while true; do

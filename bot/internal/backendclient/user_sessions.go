@@ -13,17 +13,20 @@ type UserSessionListItem struct {
 	IsCurrent bool   `json:"is_current"`
 }
 
-func (c *Client) ListUserSessions(ctx context.Context, telegramID int64) ([]UserSessionListItem, error) {
+const MenuPageSize = 10
+
+func (c *Client) ListUserSessions(ctx context.Context, telegramID int64, offset int) ([]UserSessionListItem, bool, error) {
 	var resp struct {
 		Sessions []UserSessionListItem `json:"sessions"`
+		HasMore  bool                  `json:"has_more"`
 	}
 
-	path := fmt.Sprintf("/internal/users/by-telegram/%d/sessions", telegramID)
+	path := fmt.Sprintf("/internal/users/by-telegram/%d/sessions?limit=%d&offset=%d", telegramID, MenuPageSize, offset)
 	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return resp.Sessions, nil
+	return resp.Sessions, resp.HasMore, nil
 }
 
 func (c *Client) SwitchActiveSession(ctx context.Context, telegramID, targetSessionID int64) error {

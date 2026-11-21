@@ -80,16 +80,23 @@ func (s *Server) handleGetOperatorByTelegramID(c *gin.Context) {
 // @Security     BearerAuth
 // @Success      200 {object} map[string]interface{}
 // @Failure      403 {object} map[string]string
+// @Param        limit query int false "Page size (1–200, default 50)"
+// @Param        offset query int false "Number of operators to skip"
 // @Router       /api/operators [get]
 func (s *Server) handleListOperators(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	ctx := c.Request.Context()
 
-	operators, err := s.operatorRepo.ListAll(ctx)
+	operators, err := s.operatorRepo.ListPage(ctx, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list operators"})
 		return
 	}
 
+	operators, hasMore := trimPage(operators, page.Limit)
 	items := make([]operatorListItem, 0, len(operators))
 	for _, op := range operators {
 		item := operatorListItem{
@@ -108,13 +115,13 @@ func (s *Server) handleListOperators(c *gin.Context) {
 		items = append(items, item)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"operators": items})
+	c.JSON(http.StatusOK, gin.H{"operators": items, "has_more": hasMore})
 }
 
 func (s *Server) handleCreateOperator(c *gin.Context) {
 	var req createOperatorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -156,7 +163,7 @@ func (s *Server) handleCreateOperator(c *gin.Context) {
 		return
 	}
 
-	s.writeAuditLog(ctx, creatorID, "operator_created", "operator", newOperator.ID, gin.H{"login": req.Login, "role": req.Role})
+	s.writeAuditLog(c, creatorID, "operator", "operator_created", "operator", newOperator.ID, gin.H{"login": req.Login, "role": req.Role})
 
 	c.JSON(http.StatusCreated, createOperatorResponse{
 		ID:                newOperator.ID,
@@ -191,7 +198,7 @@ func (s *Server) handleUpdateOperator(c *gin.Context) {
 
 	var req updateOperatorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -227,17 +234,13 @@ func (s *Server) handleUpdateOperator(c *gin.Context) {
 	// При переводе в disabled — немедленный отзыв всех активных сессий
 	// и переназначение его сессий на admin (согласно разделу 16 ТЗ).
 	if req.Status != nil && *req.Status == models.OperatorStatusDisabled && !wasDisabled {
-		if err := s.sessionService.RevokeAllForOperator(ctx, operator.ID); err != nil {
-			s.logger.Error("failed to revoke sessions for disabled operator", "error", err, "operator_id", operator.ID)
-		}
-
 		if err := s.reassignSessionsToAdmin(ctx, operator.ID); err != nil {
 			s.logger.Error("failed to reassign sessions from disabled operator", "error", err, "operator_id", operator.ID)
 		}
 	}
 
 	adminID, _ := getOperatorID(c)
-	s.writeAuditLog(ctx, adminID, "operator_updated", "operator", operatorID, gin.H{"changes": req})
+	s.writeAuditLog(c, adminID, "operator", "operator_updated", "operator", operatorID, gin.H{"changes": req})
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

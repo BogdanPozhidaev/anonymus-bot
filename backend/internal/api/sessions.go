@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,22 +20,13 @@ type bindSessionRequest struct {
 	TelegramID int64  `json:"telegram_id" binding:"required"`
 	Username   string `json:"username"`
 	FirstName  string `json:"first_name"`
-	Role       string `json:"role" binding:"required,oneof=client executor"`
+	Token      string `json:"token" binding:"required"`
 }
 
 type bindSessionResponse struct {
-	SessionID           int64                `json:"session_id"`
-	SessionType         string               `json:"role"`
-	Title               string               `json:"title"`
-	UndeliveredMessages []undeliveredMessage `json:"undelivered_messages,omitempty"`
-}
-
-type undeliveredMessage struct {
-	MessageID   int64  `json:"message_id"`
-	ContentType string `json:"content_type"`
-	Content     string `json:"content,omitempty"`
-	FileID      string `json:"file_id,omitempty"`
-	SenderLabel string `json:"sender_label"`
+	SessionID   int64  `json:"session_id"`
+	SessionType string `json:"role"`
+	Title       string `json:"title"`
 }
 
 type sessionListItem struct {
@@ -64,149 +57,39 @@ type stopSessionRequest struct {
 }
 
 func (s *Server) handleBindSession(c *gin.Context) {
-	sessionIDStr := c.Param("id")
-	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
-		return
-	}
-
 	var req bindSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
+	hash, ok := inviteTokenHash(req.Token)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "invitation unavailable"})
+		return
+	}
 	ctx := c.Request.Context()
-
-	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	user := &models.User{TelegramID: req.TelegramID, LanguageCode: "ru"}
+	if req.Username != "" {
+		user.Username = &req.Username
+	}
+	if req.FirstName != "" {
+		user.FirstName = &req.FirstName
+	}
+	session, role, err := s.sessionRepo.BindInvite(ctx, s.userRepo, hash, user)
+	if errors.Is(err, repository.ErrInviteUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "invitation unavailable"})
+		return
+	}
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-
-	user, err := s.getOrCreateUser(ctx, req.TelegramID, req.Username, req.FirstName)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get or create user"})
-		return
-	}
-
-	if err := s.userRepo.SetActiveSession(ctx, user.ID, session.ID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set active session"})
-		return
-	}
-
-	if req.Role == "client" && session.ClientUserID == nil {
-		if err := s.sessionRepo.SetClientUser(ctx, session.ID, user.ID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind client"})
-			return
-		}
-		session.ClientUserID = &user.ID
-	} else if req.Role == "executor" && session.ExecutorUserID == nil {
-		if err := s.sessionRepo.SetExecutorUser(ctx, session.ID, user.ID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind executor"})
-			return
-		}
-		session.ExecutorUserID = &user.ID
-	}
-
-	undelivered, err := s.collectUndeliveredMessagesFor(ctx, session, user.ID)
-	if err != nil {
-		s.logger.Error("failed to collect undelivered messages", "error", err, "session_id", session.ID)
-		// Не блокируем сам bind из-за этой ошибки — привязка важнее, сообщения можно попробовать доставить позже.
-	}
-
 	c.JSON(http.StatusOK, bindSessionResponse{
-		SessionID:           session.ID,
-		SessionType:         req.Role,
-		Title:               session.Title,
-		UndeliveredMessages: undelivered,
+		SessionID:   session.ID,
+		SessionType: role,
+		Title:       session.Title,
 	})
-}
-
-// collectUndeliveredMessagesFor находит недоставленные сообщения сессии, адресованные
-// только что подключившемуся пользователю (то есть отправленные противоположной стороной),
-// помечает их доставленными и возвращает для отправки ботом.
-func (s *Server) collectUndeliveredMessagesFor(ctx context.Context, session *models.Session, newlyBoundUserID int64) ([]undeliveredMessage, error) {
-	allUndelivered, err := s.messageRepo.ListUndelivered(ctx, session.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(allUndelivered) == 0 {
-		return nil, nil
-	}
-
-	var result []undeliveredMessage
-	var deliveredIDs []int64
-
-	for _, m := range allUndelivered {
-		// Сообщение адресовано новому участнику, только если отправитель — НЕ он сам.
-		if m.SenderUserID != nil && *m.SenderUserID == newlyBoundUserID {
-			continue
-		}
-
-		label := "Клиент:"
-		if m.SenderRole == models.SenderRoleExecutor {
-			label = "Менеджер:"
-		}
-
-		item := undeliveredMessage{
-			MessageID:   m.ID,
-			ContentType: m.ContentType,
-			SenderLabel: label,
-		}
-		if m.Content != nil {
-			item.Content = *m.Content
-		}
-		if m.FileID != nil {
-			item.FileID = *m.FileID
-		}
-
-		result = append(result, item)
-		deliveredIDs = append(deliveredIDs, m.ID)
-	}
-
-	if len(deliveredIDs) > 0 {
-		if err := s.messageRepo.MarkDelivered(ctx, deliveredIDs); err != nil {
-			return nil, err
-		}
-	}
-
-	return result, nil
-}
-
-// getOrCreateUser ищет пользователя по telegram_id; если не найден — создаёт нового.
-func (s *Server) getOrCreateUser(ctx context.Context, telegramID int64, username, firstName string) (*models.User, error) {
-	user, err := s.userRepo.GetByTelegramID(ctx, telegramID)
-	if err == nil {
-		return user, nil
-	}
-
-	if !errors.Is(err, repository.ErrNotFound) {
-		return nil, err
-	}
-
-	newUser := &models.User{
-		TelegramID:   telegramID,
-		LanguageCode: "ru",
-	}
-	if username != "" {
-		newUser.Username = &username
-	}
-	if firstName != "" {
-		newUser.FirstName = &firstName
-	}
-
-	if err := s.userRepo.Create(ctx, newUser); err != nil {
-		return nil, err
-	}
-
-	return newUser, nil
 }
 
 // handleListSessions godoc
@@ -217,27 +100,47 @@ func (s *Server) getOrCreateUser(ctx context.Context, telegramID int64, username
 // @Security     BearerAuth
 // @Success      200 {object} map[string]interface{}
 // @Failure      401 {object} map[string]string
+// @Param        limit query int false "Page size (1–200, default 50)"
+// @Param        offset query int false "Number of sessions to skip"
+// @Param        status query string false "Session status"
+// @Param        q query string false "Title substring or session ID"
 // @Router       /api/sessions [get]
 func (s *Server) handleListSessions(c *gin.Context) {
-	ctx := c.Request.Context()
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
+	status := c.Query("status")
+	switch status {
+	case "", models.SessionStatusActive, models.SessionStatusPaused, models.SessionStatusPendingClose, models.SessionStatusClosed:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session status"})
+		return
+	}
+	query := strings.TrimSpace(c.Query("q"))
+	if len(query) > 240 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "search query is too long"})
+		return
+	}
 
 	operatorID, _ := getOperatorID(c)
 	role, _ := getOperatorRole(c)
 
-	var sessions []*models.Session
-	var err error
-
-	if role == models.OperatorRoleAdmin {
-		sessions, err = s.sessionRepo.ListAll(ctx)
-	} else {
-		sessions, err = s.sessionRepo.ListByOperator(ctx, operatorID)
+	var owner *int64
+	if role != models.OperatorRoleAdmin {
+		owner = &operatorID
 	}
 
+	sessions, err := s.sessionRepo.ListPanelPage(c.Request.Context(), owner, status, query, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
 		return
 	}
 
+	hasMore := len(sessions) > page.Limit
+	if hasMore {
+		sessions = sessions[:page.Limit]
+	}
 	items := make([]sessionListItem, 0, len(sessions))
 	for _, sess := range sessions {
 		items = append(items, sessionListItem{
@@ -251,7 +154,7 @@ func (s *Server) handleListSessions(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"sessions": items})
+	c.JSON(http.StatusOK, gin.H{"sessions": items, "has_more": hasMore})
 }
 
 // handleGetSession godoc
@@ -317,7 +220,7 @@ func (s *Server) canAccessSession(c *gin.Context, session *models.Session) bool 
 func (s *Server) handleCreateSession(c *gin.Context) {
 	var req createSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -346,6 +249,7 @@ func (s *Server) handleCreateSession(c *gin.Context) {
 		s.logger.Error("failed to assign creator as owner", "error", err, "session_id", session.ID)
 	}
 
+	s.writeAuditLog(c, operatorID, "operator", "session_created", "session", session.ID, nil)
 	c.JSON(http.StatusCreated, session)
 }
 
@@ -353,6 +257,19 @@ type updateSessionStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=active paused closed"`
 }
 
+// handleUpdateSessionStatus godoc
+// @Summary      Update session status
+// @Tags         sessions
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path int true "Session ID"
+// @Param        request body updateSessionStatusRequest true "New status"
+// @Success      200 {object} map[string]string
+// @Failure      403 {object} map[string]string
+// @Failure      409 {object} map[string]string
+// @Failure      413 {object} map[string]string
+// @Router       /api/sessions/{id}/status [patch]
 func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
 	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -362,7 +279,7 @@ func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
 
 	var req updateSessionStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -383,14 +300,32 @@ func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
 		return
 	}
 
-	if err := s.sessionRepo.UpdateStatus(ctx, sessionID, req.Status); err != nil {
+	if session.Status == req.Status {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	}
+	if req.Status == models.SessionStatusActive {
+		if err := s.moderationService.Reset(ctx, session.ID); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "moderation unavailable; try again"})
+			return
+		}
+	}
+	changed, err := s.sessionRepo.TransitionStatus(ctx, sessionID, session.Status, req.Status)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
+		return
+	}
+	if !changed {
+		c.JSON(http.StatusConflict, gin.H{"error": "session status changed; refresh and retry"})
 		return
 	}
 
 	operatorID, _ := getOperatorID(c)
-	s.writeAuditLog(ctx, operatorID, "session_status_updated", "session", sessionID, gin.H{"new_status": req.Status})
+	s.writeAuditLog(c, operatorID, "operator", "session_status_updated", "session", sessionID, gin.H{"new_status": req.Status})
 
+	if req.Status == models.SessionStatusPaused || req.Status == models.SessionStatusClosed {
+		s.notifySessionStatus(ctx, session, req.Status)
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -407,7 +342,7 @@ func (s *Server) handleAssignSessionOwner(c *gin.Context) {
 
 	var req assignOwnerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -435,12 +370,26 @@ func (s *Server) handleAssignSessionOwner(c *gin.Context) {
 	}
 
 	operatorID, _ := getOperatorID(c)
-	s.writeAuditLog(ctx, operatorID, "session_owner_reassigned", "session", sessionID, gin.H{"new_owner_id": req.OperatorID})
+	s.writeAuditLog(c, operatorID, "operator", "session_owner_reassigned", "session", sessionID, gin.H{"new_owner_id": req.OperatorID})
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// handleListSessionMessages godoc
+// @Summary      Read a page of session history
+// @Tags         sessions
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path int true "Session ID"
+// @Param        limit query int false "Page size (1–200, default 50)"
+// @Param        offset query int false "Number of newest messages to skip"
+// @Success      200 {object} map[string]interface{}
+// @Router       /api/sessions/{id}/messages [get]
 func (s *Server) handleListSessionMessages(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
@@ -464,16 +413,28 @@ func (s *Server) handleListSessionMessages(c *gin.Context) {
 		return
 	}
 
-	messages, err := s.messageRepo.ListBySessionID(ctx, sessionID)
+	messages, err := s.messageRepo.ListRecentBySessionID(ctx, sessionID, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list messages"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"messages": messages})
+	hasMore := len(messages) > page.Limit
+	if hasMore {
+		messages = messages[:page.Limit]
+	}
+	slices.Reverse(messages)
+	if messages == nil {
+		messages = []*models.Message{}
+	}
+	c.JSON(http.StatusOK, gin.H{"messages": messages, "has_more": hasMore})
 }
 
 func (s *Server) handleListUserSessions(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	telegramID, err := strconv.ParseInt(c.Param("telegramID"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid telegram id"})
@@ -492,12 +453,13 @@ func (s *Server) handleListUserSessions(c *gin.Context) {
 		return
 	}
 
-	sessions, err := s.sessionRepo.ListByParticipant(ctx, user.ID)
+	sessions, err := s.sessionRepo.ListByParticipantPage(ctx, user.ID, user.ActiveSessionID, page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
 		return
 	}
 
+	sessions, hasMore := trimPage(sessions, page.Limit)
 	items := make([]userSessionListItem, 0, len(sessions))
 	for _, sess := range sessions {
 		role := models.SenderRoleClient
@@ -514,7 +476,7 @@ func (s *Server) handleListUserSessions(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"sessions": items})
+	c.JSON(http.StatusOK, gin.H{"sessions": items, "has_more": hasMore})
 }
 
 type switchActiveSessionRequest struct {
@@ -530,7 +492,7 @@ func (s *Server) handleSwitchActiveSession(c *gin.Context) {
 
 	var req switchActiveSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -556,13 +518,14 @@ func (s *Server) handleSwitchActiveSession(c *gin.Context) {
 		return
 	}
 
+	s.writeAuditLog(c, user.ID, "user", "session_switched", "session", req.TargetSessionID, nil)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (s *Server) handleStopSession(c *gin.Context) {
 	var req stopSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -598,7 +561,7 @@ func (s *Server) handleStopSession(c *gin.Context) {
 		s.logger.Error("failed to set close_requested_by", "error", err, "session_id", session.ID)
 	}
 
-	s.writeAuditLog(ctx, user.ID, "session_stop_requested", "session", session.ID, nil)
+	s.writeAuditLog(c, user.ID, "user", "session_stop_requested", "session", session.ID, nil)
 
 	// Уведомляем вторую сторону нейтральным сообщением.
 	var counterpartUserID *int64
@@ -640,6 +603,10 @@ func (s *Server) sendStopRequestAlert(ctx context.Context, session *models.Sessi
 }
 
 func (s *Server) handleListOperatorSessionsInternal(c *gin.Context) {
+	page, ok := readPage(c)
+	if !ok {
+		return
+	}
 	telegramID, err := strconv.ParseInt(c.Param("telegramID"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid telegram id"})
@@ -658,7 +625,7 @@ func (s *Server) handleListOperatorSessionsInternal(c *gin.Context) {
 		return
 	}
 
-	sessions, err := s.sessionRepo.ListByOperator(ctx, operator.ID)
+	sessions, err := s.sessionRepo.ListPanelPage(ctx, &operator.ID, "", "", page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
 		return
@@ -670,10 +637,11 @@ func (s *Server) handleListOperatorSessionsInternal(c *gin.Context) {
 		Status string `json:"status"`
 	}
 
+	sessions, hasMore := trimPage(sessions, page.Limit)
 	items := make([]item, 0, len(sessions))
 	for _, sess := range sessions {
 		items = append(items, item{ID: sess.ID, Title: sess.Title, Status: sess.Status})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"sessions": items})
+	c.JSON(http.StatusOK, gin.H{"sessions": items, "has_more": hasMore})
 }
