@@ -66,6 +66,9 @@ func NewServer(
 		moderationService:   moderationService,
 		sessionService:      sessionService,
 		pendingAuthService:  pendingAuthService,
+		botClient:           botClient,
+		photosDir:           photosDir,
+		voiceDir:            voiceDir,
 	}
 }
 
