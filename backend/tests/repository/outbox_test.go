@@ -24,7 +24,7 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 	users := repository.NewUserRepository(pool, nil)
 	sessions := repository.NewSessionRepository(pool)
 	messages := repository.NewMessageRepository(pool)
-	client := models.User{TelegramID: 701, LanguageCode: "ru"}
+	client := models.User{TelegramID: 701, LanguageCode: "en"}
 	if err := users.Create(ctx, &client); err != nil {
 		t.Fatal(err)
 	}
@@ -121,14 +121,19 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 	statuses <- 503
 	next(true)
 	first := <-requests
-	if first.RecipientTelegramID != 702 || first.Text != "fixture" {
+	if first.RecipientTelegramID != 702 || first.Text != "fixture" || first.Language != "ru" || first.SenderLabel != "Клиент:" {
 		t.Fatal("incorrect queued text delivery")
 	}
 	assertState(text, "retrying", false)
 	next(false)
+	if err := users.UpdateLanguage(ctx, 702, "en"); err != nil {
+		t.Fatal(err)
+	}
 	ready(text)
 	next(true)
-	<-requests
+	if retry := <-requests; retry.Language != "en" || retry.SenderLabel != "Client:" {
+		t.Fatal("retried delivery did not use the recipient's current language")
+	}
 	assertState(text, "delivered", true)
 	next(false)
 
@@ -171,7 +176,8 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 	statuses <- 503
 	next(true)
 	notice := <-requests
-	if notice.RecipientTelegramID != 701 || notice.ContentType != "text" || notice.SessionID != 0 || notice.FileID != "" || notice.Text == "" {
+	if notice.RecipientTelegramID != 701 || notice.ContentType != "text" || notice.SessionID != 0 || notice.FileID != "" ||
+		notice.Text != "We could not confirm delivery after several attempts. Contact an operator." {
 		t.Fatal("failure notification did not go privately to the sender")
 	}
 	ready(voice)

@@ -1,3 +1,4 @@
+import { sessionStatusMessages, usePanelLocale } from '../i18n/panelLocale';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -30,15 +31,10 @@ const statusColors: Record<SessionStatus, string> = {
   closed: 'gray',
 };
 
-const statusLabels: Record<SessionStatus, string> = {
-  active: 'Активна',
-  paused: 'На паузе',
-  pending_close: 'Ожидает закрытия',
-  closed: 'Закрыта',
-};
 const pageSize = 50;
 
 export function SessionsPage() {
+  const { t, locale } = usePanelLocale();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -61,46 +57,47 @@ export function SessionsPage() {
     mutationFn: (title: string) => createSession(title),
     onSuccess: (newSession) => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      notifications.show({ message: 'Сессия создана', color: 'green' });
+      notifications.show({ message: t('sessionCreated'), color: 'green' });
       setCreateModalOpen(false);
       createForm.reset();
       navigate(`/sessions/${newSession.id}`);
     },
     onError: () => {
-      notifications.show({ message: 'Не удалось создать сессию', color: 'red' });
+      notifications.show({ message: t('sessionCreateFailed'), color: 'red' });
     },
   });
 
   return (
     <>
       <Group justify="space-between" mb="md">
-        <Title order={2}>Сессии</Title>
+        <Title order={2}>{t('sessions')}</Title>
         <Button leftSection={<IconPlus size={18} />} onClick={() => setCreateModalOpen(true)}>
-          Создать сессию
+          {t('createSession')}
         </Button>
       </Group>
 
       <Group mb="md">
-        <TextInput label="Поиск по названию или ID" value={search} maxLength={80} onChange={(event) => {
+        <TextInput label={t('sessionSearch')} value={search} maxLength={80} onChange={(event) => {
           setSearch(event.currentTarget.value);
           setOffset(0);
         }} />
-        <Select label="Статус" clearable value={status ?? null} onChange={(value) => {
+        <Select label={t('status')} clearable value={status ?? null} onChange={(value) => {
           setStatus(value === null ? undefined : value as SessionStatus);
           setOffset(0);
-        }} data={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))} />
+        }} data={Object.entries(sessionStatusMessages).map(([value, key]) => ({ value, label: t(key) }))}
+          clearButtonProps={{ 'aria-label': t('clear') }} />
       </Group>
       {isLoading && <Loader />}
-      {error && <Text c="red">Не удалось загрузить список сессий</Text>}
+      {error && <Text c="red">{t('sessionsLoadFailed')}</Text>}
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
             <Table.Th>ID</Table.Th>
-            <Table.Th>Название</Table.Th>
-            <Table.Th>Статус</Table.Th>
-            <Table.Th>Клиент</Table.Th>
-            <Table.Th>Исполнитель</Table.Th>
-            <Table.Th>Создана</Table.Th>
+            <Table.Th>{t('title')}</Table.Th>
+            <Table.Th>{t('status')}</Table.Th>
+            <Table.Th>{t('client')}</Table.Th>
+            <Table.Th>{t('executor')}</Table.Th>
+            <Table.Th>{t('createdAt')}</Table.Th>
             <Table.Th></Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -111,14 +108,14 @@ export function SessionsPage() {
               <Table.Td>{session.title}</Table.Td>
               <Table.Td>
                 <Badge color={statusColors[session.status]}>
-                  {statusLabels[session.status]}
+                  {t(sessionStatusMessages[session.status])}
                 </Badge>
               </Table.Td>
-              <Table.Td>{session.client_user_id ? 'Подключён' : '—'}</Table.Td>
-              <Table.Td>{session.executor_user_id ? 'Подключён' : '—'}</Table.Td>
-              <Table.Td>{new Date(session.created_at).toLocaleString('ru-RU')}</Table.Td>
+              <Table.Td>{session.client_user_id ? t('connected') : '—'}</Table.Td>
+              <Table.Td>{session.executor_user_id ? t('connected') : '—'}</Table.Td>
+              <Table.Td>{new Date(session.created_at).toLocaleString(locale)}</Table.Td>
               <Table.Td>
-                <ActionIcon variant="subtle" onClick={() => navigate(`/sessions/${session.id}`)}>
+                <ActionIcon variant="subtle" aria-label={t('openSession')} onClick={() => navigate(`/sessions/${session.id}`)}>
                   <IconExternalLink size={18} />
                 </ActionIcon>
               </Table.Td>
@@ -128,32 +125,33 @@ export function SessionsPage() {
       </Table>
       {(offset > 0 || data?.has_more) && (
         <Group justify="end" mt="md">
-          <Button variant="default" disabled={isLoading || offset === 0} onClick={() => setOffset(offset - pageSize)}>Назад</Button>
-          <Button variant="default" disabled={isLoading || !data?.has_more} onClick={() => setOffset(offset + pageSize)}>Вперёд</Button>
+          <Button variant="default" disabled={isLoading || offset === 0} onClick={() => setOffset(offset - pageSize)}>{t('back')}</Button>
+          <Button variant="default" disabled={isLoading || !data?.has_more} onClick={() => setOffset(offset + pageSize)}>{t('next')}</Button>
         </Group>
       )}
 
       {sessions?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">
-          Сессий пока нет
+          {t('emptySessions')}
         </Text>
       )}
 
       <Modal
         opened={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        title="Новая сессия"
+        title={t('newSession')}
+        closeButtonProps={{ 'aria-label': t('closeDialog') }}
       >
         <form onSubmit={createForm.onSubmit((values) => createMutation.mutate(values.title))}>
           <Stack>
             <TextInput
-              label="Внутреннее название"
-              placeholder="Например: Заказ №123"
+              label={t('internalTitle')}
+              placeholder={t('titleExample')}
               required
               {...createForm.getInputProps('title')}
             />
             <Button type="submit" loading={createMutation.isPending}>
-              Создать
+              {t('create')}
             </Button>
           </Stack>
         </form>

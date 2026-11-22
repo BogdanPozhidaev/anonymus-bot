@@ -36,6 +36,7 @@ func (s *Server) handleGetUserByTelegramID(c *gin.Context) {
 		"id":                user.ID,
 		"telegram_id":       user.TelegramID,
 		"active_session_id": user.ActiveSessionID,
+		"language_code":     user.LanguageCode,
 	})
 }
 
@@ -53,22 +54,13 @@ func (s *Server) handleUpdateUserLanguage(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
-
-	user, err := s.userRepo.GetByTelegramID(ctx, telegramID)
+	err = s.userRepo.UpdateLanguage(c.Request.Context(), telegramID, req.LanguageCode)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
-	user.LanguageCode = req.LanguageCode
-
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update language"})
 		return
 	}
 

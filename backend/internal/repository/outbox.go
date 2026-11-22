@@ -12,10 +12,10 @@ import (
 )
 
 type Delivery struct {
-	MessageID, SessionID, RecipientTelegramID       int64
-	SenderRole, ContentType, Content, FileID, Lease string
-	Attempts                                        int
-	Notice, CanNotify                               bool
+	MessageID, SessionID, RecipientTelegramID                 int64
+	SenderRole, ContentType, Content, FileID, Lease, Language string
+	Attempts                                                  int
+	Notice, CanNotify                                         bool
 }
 
 func (r *MessageRepository) Enqueue(ctx context.Context, m *models.Message) error {
@@ -36,6 +36,7 @@ func (r *MessageRepository) ClaimDelivery(ctx context.Context, lease time.Durati
 WITH candidate AS (
  SELECT o.message_id, m.session_id,
         CASE WHEN o.notice_pending THEN sender.telegram_id ELSE recipient.telegram_id END AS telegram_id,
+        COALESCE(CASE WHEN o.notice_pending THEN sender.language_code ELSE recipient.language_code END,'ru') AS language,
         COALESCE(m.impersonated_role,m.sender_role) AS sender_role, m.content_type,
         COALESCE(m.content,'') AS content, COALESCE(m.file_id,'') AS file_id,
         CASE WHEN o.notice_pending THEN o.notice_attempts ELSE o.attempts END AS attempts,
@@ -54,9 +55,9 @@ WITH candidate AS (
 )
 UPDATE message_outbox o SET lease_token=$1, available_at=clock_timestamp()+($2::bigint * interval '1 millisecond')
 FROM candidate c WHERE o.message_id=c.message_id
-RETURNING c.message_id,c.session_id,c.telegram_id,c.sender_role,c.content_type,c.content,c.file_id,c.attempts,c.notice_pending,c.can_notify`
+RETURNING c.message_id,c.session_id,c.telegram_id,c.sender_role,c.content_type,c.content,c.file_id,c.attempts,c.notice_pending,c.can_notify,c.language`
 	d := &Delivery{Lease: uuid.NewString()}
-	err := r.pool.QueryRow(ctx, query, d.Lease, lease.Milliseconds()).Scan(&d.MessageID, &d.SessionID, &d.RecipientTelegramID, &d.SenderRole, &d.ContentType, &d.Content, &d.FileID, &d.Attempts, &d.Notice, &d.CanNotify)
+	err := r.pool.QueryRow(ctx, query, d.Lease, lease.Milliseconds()).Scan(&d.MessageID, &d.SessionID, &d.RecipientTelegramID, &d.SenderRole, &d.ContentType, &d.Content, &d.FileID, &d.Attempts, &d.Notice, &d.CanNotify, &d.Language)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

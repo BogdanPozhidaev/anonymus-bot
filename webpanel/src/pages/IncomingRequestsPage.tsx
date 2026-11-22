@@ -1,3 +1,4 @@
+import { usePanelLocale } from '../i18n/panelLocale';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -11,6 +12,7 @@ import { ListPager } from '../components/ListPager';
 const pageSize = 50;
 
 export function IncomingRequestsPage() {
+  const { t, locale } = usePanelLocale();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<'new' | 'processed'>('new');
@@ -27,8 +29,8 @@ export function IncomingRequestsPage() {
     mutationFn: async (requestId: number) => {
       const request = requests?.find((r) => r.id === requestId);
       const title = request?.first_name
-        ? `Обращение от ${request.first_name}`
-        : `Обращение #${requestId}`;
+        ? t('requestFrom', { name: request.first_name })
+        : t('requestNumber', { id: requestId });
 
       const session = await createSession(title);
       await markIncomingRequestProcessed(requestId);
@@ -36,38 +38,38 @@ export function IncomingRequestsPage() {
     },
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['incoming-requests'] });
-      notifications.show({ message: 'Сессия создана', color: 'green' });
+      notifications.show({ message: t('sessionCreated'), color: 'green' });
       navigate(`/sessions/${session.id}`);
     },
     onError: () => {
-      notifications.show({ message: 'Не удалось создать сессию', color: 'red' });
+      notifications.show({ message: t('sessionCreateFailed'), color: 'red' });
     },
   });
 
   return (
     <>
       <Title order={2} mb="md">
-        Входящие обращения
+        {t('requests')}
       </Title>
 
       <Group mb="md">
         <Button variant={status === 'new' ? 'filled' : 'default'} aria-pressed={status === 'new'} onClick={() => { setStatus('new'); setOffset(0); }}>
-          Новые
+          {t('newItems')}
         </Button>
         <Button variant={status === 'processed' ? 'filled' : 'default'} aria-pressed={status === 'processed'} onClick={() => { setStatus('processed'); setOffset(0); }}>
-          Обработанные
+          {t('processedItems')}
         </Button>
       </Group>
       {isLoading && <Loader />}
-      {isError && <Alert color="red">Не удалось загрузить обращения</Alert>}
+      {isError && <Alert color="red">{t('requestsLoadFailed')}</Alert>}
       {requests && <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Имя</Table.Th>
-            <Table.Th>Username</Table.Th>
-            <Table.Th>Первое сообщение</Table.Th>
-            <Table.Th>Язык</Table.Th>
-            <Table.Th>Дата</Table.Th>
+            <Table.Th>{t('name')}</Table.Th>
+            <Table.Th>{t('telegramUsername')}</Table.Th>
+            <Table.Th>{t('firstMessage')}</Table.Th>
+            <Table.Th>{t('language')}</Table.Th>
+            <Table.Th>{t('date')}</Table.Th>
             <Table.Th></Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -84,15 +86,15 @@ export function IncomingRequestsPage() {
               <Table.Td>
                 <Badge variant="light">{req.language_code || '—'}</Badge>
               </Table.Td>
-              <Table.Td>{new Date(req.created_at).toLocaleString('ru-RU')}</Table.Td>
+              <Table.Td>{new Date(req.created_at).toLocaleString(locale)}</Table.Td>
               <Table.Td>
                 {status === 'new' ? <Button
                   size="xs"
                   onClick={() => createSessionMutation.mutate(req.id)}
                   loading={createSessionMutation.isPending}
                 >
-                  Создать сессию
-                </Button> : <Badge variant="light">Обработано</Badge>}
+                  {t('createSession')}
+                </Button> : <Badge variant="light">{t('processed')}</Badge>}
               </Table.Td>
             </Table.Tr>
           ))}
@@ -102,7 +104,7 @@ export function IncomingRequestsPage() {
 
       {requests?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">
-          {status === 'new' ? 'Новых обращений нет' : 'Обработанных обращений нет'}
+          {status === 'new' ? t('noNewRequests') : t('noProcessedRequests')}
         </Text>
       )}
     </>

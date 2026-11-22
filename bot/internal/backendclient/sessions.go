@@ -6,10 +6,11 @@ import (
 )
 
 type BindSessionRequest struct {
-	TelegramID int64  `json:"telegram_id"`
-	Username   string `json:"username,omitempty"`
-	FirstName  string `json:"first_name,omitempty"`
-	Token      string `json:"token"`
+	TelegramID   int64  `json:"telegram_id"`
+	Username     string `json:"username,omitempty"`
+	FirstName    string `json:"first_name,omitempty"`
+	Token        string `json:"token"`
+	LanguageCode string `json:"language_code,omitempty"`
 }
 
 type BindSessionResponse struct {

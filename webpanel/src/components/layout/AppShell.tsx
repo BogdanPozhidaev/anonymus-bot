@@ -1,21 +1,31 @@
-import { AppShell as MantineAppShell, NavLink, Group, Text, Button } from '@mantine/core';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { usePanelLocale } from '../../i18n/panelLocale';
+import { AppShell as MantineAppShell, NavLink, Group, Text, Button, Burger } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { useQueryClient } from '@tanstack/react-query';
+import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   IconMessageCircle,
   IconUsers,
   IconInbox,
   IconHistory,
   IconLogout,
+  IconKey,
+  IconLock,
+  IconBrandTelegram,
+  IconDashboard,
 } from '@tabler/icons-react';
 
 import { useAuthStore } from '../../stores/authStore';
 import { logout as logoutRequest } from '../../api/auth';
-import { panelConfig } from '../../panelConfig';
+import { LanguageSelector } from '../LanguageSelector';
 
 export function AppShell() {
+  const { t, productName } = usePanelLocale();
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, logout } = useAuthStore();
+  const queryClient = useQueryClient();
+  const { role, logout, passwordChangeRequired } = useAuthStore();
+  const [mobileMenuOpened, { toggle, close }] = useDisclosure(false);
 
   const handleLogout = async () => {
     try {
@@ -24,36 +34,52 @@ export function AppShell() {
       // Даже если запрос на backend не удался, разлогиниваем локально —
       // токен уже мог истечь, нет смысла блокировать пользователя.
     }
+    queryClient.clear();
     logout();
     navigate('/login');
   };
 
   const navItems = [
-    { path: '/sessions', label: 'Сессии', icon: IconMessageCircle },
-    { path: '/incoming-requests', label: 'Входящие обращения', icon: IconInbox },
+    { path: '/dashboard', label: t('dashboard'), icon: IconDashboard },
+    { path: '/sessions', label: t('sessions'), icon: IconMessageCircle },
+    { path: '/incoming-requests', label: t('requests'), icon: IconInbox },
+    { path: '/account/password', label: t('passwordChange'), icon: IconKey },
+    { path: '/account/recovery', label: t('recoveryCodes'), icon: IconLock },
+    { path: '/account/telegram', label: t('telegramAccount'), icon: IconBrandTelegram },
   ];
 
   if (role === 'admin') {
-    navItems.push({ path: '/audit-log', label: 'Аудит', icon: IconHistory });
-    navItems.push({ path: '/operators', label: 'Операторы', icon: IconUsers });
+    navItems.push({ path: '/audit-log', label: t('audit'), icon: IconHistory });
+    navItems.push({ path: '/operators', label: t('operators'), icon: IconUsers });
   }
 
   return (
-    <MantineAppShell navbar={{ width: 260, breakpoint: 'sm' }} padding="md">
+    <MantineAppShell header={{ height: { base: 48, sm: 0 } }}
+      navbar={{ width: 260, breakpoint: 'sm', collapsed: { mobile: !mobileMenuOpened } }} padding="md">
+      <MantineAppShell.Header hiddenFrom="sm">
+        <Group h="100%" px="md">
+          <Burger opened={mobileMenuOpened} onClick={toggle} size="sm"
+            aria-label={t(mobileMenuOpened ? 'closeNavigation' : 'openNavigation')} aria-expanded={mobileMenuOpened} />
+          <Text fw={700}>{productName}</Text>
+        </Group>
+      </MantineAppShell.Header>
       <MantineAppShell.Navbar p="md">
         <Text fw={700} size="lg" mb="md">
-          {panelConfig().productName}
+          {productName}
         </Text>
-        {navItems.map((item) => (
+        {!passwordChangeRequired && navItems.map((item) => (
           <NavLink
             key={item.path}
+            component={Link}
+            to={item.path}
             label={item.label}
             leftSection={<item.icon size={18} />}
             active={location.pathname.startsWith(item.path)}
-            onClick={() => navigate(item.path)}
+            onClick={close}
           />
         ))}
         <Group mt="auto" pt="md">
+          <LanguageSelector />
           <Button
             variant="subtle"
             color="red"
@@ -61,7 +87,7 @@ export function AppShell() {
             onClick={handleLogout}
             fullWidth
           >
-            Выйти
+            {t('signOut')}
           </Button>
         </Group>
       </MantineAppShell.Navbar>

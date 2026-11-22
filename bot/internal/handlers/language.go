@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -24,6 +26,9 @@ const (
 )
 
 func (h *LanguageHandler) HandleCommand(message *tgbotapi.Message) {
+	if message.Chat == nil || !message.Chat.IsPrivate() {
+		return
+	}
 	msg := tgbotapi.NewMessage(message.Chat.ID, "Выберите язык / Choose language:")
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -40,15 +45,28 @@ func (h *LanguageHandler) HandleCommand(message *tgbotapi.Message) {
 }
 
 func (h *LanguageHandler) HandleCallback(ctx context.Context, callback *tgbotapi.CallbackQuery) {
-	langCode := callback.Data[len(languageCallbackPrefix):]
+	if callback.Message == nil || callback.Message.Chat == nil || !callback.Message.Chat.IsPrivate() || callback.From == nil {
+		return
+	}
+	langCode, ok := strings.CutPrefix(callback.Data, languageCallbackPrefix)
 
-	if langCode != "ru" && langCode != "en" {
-		h.logger.Warn("unknown language code in callback", "lang_code", langCode)
+	if !ok || (langCode != "ru" && langCode != "en") {
 		return
 	}
 
 	if err := h.backend.UpdateUserLanguage(ctx, callback.From.ID, langCode); err != nil {
-		h.logger.Error("failed to update user language", "error", err, "telegram_id", callback.From.ID)
+		text := tr(callback.From, "Не удалось сохранить язык. Попробуйте позже.", "Unable to save the language. Try again later.")
+		if errors.Is(err, backendclient.ErrNotFound) {
+			text = tr(callback.From, "Сначала подключитесь к сессии или привяжите аккаунт оператора.",
+				"Join a session or link your operator account first.")
+		} else {
+			h.logger.Error("failed to update user language")
+		}
+		alert := tgbotapi.NewCallbackWithAlert(callback.ID, text)
+		if _, err := h.bot.Request(alert); err != nil {
+			h.logger.Error("failed to answer callback")
+		}
+		return
 	}
 
 	callbackConfig := tgbotapi.NewCallback(callback.ID, "")

@@ -4,7 +4,9 @@
 
 Start backend and verify migration status using [MIGRATIONS.MD](MIGRATIONS.MD).
 Save a unique password on one line in a restricted UTF-8 file outside Git.
-The limit is 72 bytes excluding the newline. From the repository root:
+Use at least 12 characters and at most 72 UTF-8 bytes excluding the
+newline. Control characters and entirely blank passwords are rejected.
+From the repository root:
 
 ```powershell
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -51,17 +53,23 @@ OPERATOR_GROUP_CHAT_ID=-100123456789
 docker compose up --build bot
 \`\`\`
 
-## Whitelist для команды /operator
+## Привязка аккаунта для команды /operator
 
-Личный режим \`/operator\` в боте доступен только тем, кто уже является
-активным оператором в системе (проверяется по telegram_id через таблицу
-\`operators\`). Чтобы оператор мог использовать эту команду, у него должен
-быть заполнен \`telegram_id\` в записи оператора — сейчас это делается
-вручную через SQL:
+1. Войдите в панель с постоянным паролем и TOTP. Откройте
+   **Аккаунт Telegram** и нажмите **Начать привязку**.
+2. Отправьте команду с кодом из панели в личном чате с ботом.
+3. Введите код из ответа бота в панель и нажмите **Подтвердить привязку**.
+4. Отправьте боту `/operator`, чтобы открыть меню.
 
-\`\`\`sql
-UPDATE operators SET telegram_id = <telegram_id_оператора> WHERE login = '<логин>';
-\`\`\`
+На оба шага с кодами даётся пять минут с момента их выпуска в панели.
+При истечении срока создайте новый код. Держите оба кода в личном чате
+и панели. Для смены аккаунта повторите процедуру через
+**Привязать другой аккаунт**. Предыдущая привязка действует до
+подтверждения новой. Каждый аккаунт Telegram можно привязать
+только к одному оператору.
 
-(автоматическое приглашение через Telegram с самостоятельной привязкой
-telegram_id — не реализовано в MVP, см. "Известные ограничения" в README)
+Команда `/language` сохраняет русский или английский язык личного
+диалога после подключения к сессии или привязки аккаунта оператора.
+У пользователя, который уже участвовал в сессии и затем привязал
+аккаунт оператора, применяется язык профиля участника.
+Уведомления в общей группе операторов остаются на русском.

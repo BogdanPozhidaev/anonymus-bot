@@ -157,6 +157,26 @@ func (r *UserRepository) Update(ctx context.Context, u *models.User) error {
 	return nil
 }
 
+func (r *UserRepository) UpdateLanguage(ctx context.Context, telegramID int64, language string) error {
+	var updated bool
+	err := r.pool.QueryRow(ctx, `
+		WITH participant AS (
+			UPDATE users SET language_code=$2 WHERE telegram_id=$1 RETURNING id
+		), operator_profile AS (
+			UPDATE operators SET language=$2 WHERE telegram_id=$1 AND status='active'
+				AND NOT must_change_password AND NOT EXISTS (SELECT 1 FROM participant)
+			RETURNING id
+		) SELECT EXISTS(SELECT 1 FROM participant) OR EXISTS(SELECT 1 FROM operator_profile)
+	`, telegramID, language).Scan(&updated)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *UserRepository) SetActiveSession(ctx context.Context, userID, sessionID int64) error {
 	query := `UPDATE users SET active_session_id = $1 WHERE id = $2`
 

@@ -16,6 +16,7 @@ type SendMessageRequest struct {
 	SenderLabel         string `json:"sender_label"`
 	Text                string `json:"text"`
 	SessionID           int64  `json:"session_id"`
+	Language            string `json:"language,omitempty"`
 }
 
 type Client struct {

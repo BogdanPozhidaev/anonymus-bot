@@ -9,7 +9,7 @@ if [ -n "$username" ] && { [ "${#username}" -lt 5 ] || [ "${#username}" -gt 32 ]
   echo 'PANEL_BOT_USERNAME must be 5–32 characters' >&2
   exit 1
 fi
-product=$(printf '%s' "${PANEL_PRODUCT_NAME:-Панель Посредника}" | base64 | tr -d '\n')
+product=$(printf '%s' "${PANEL_PRODUCT_NAME:-}" | base64 | tr -d '\n')
 path=/usr/share/nginx/html/panel-config.json
 printf '{"botUsername":"%s","productNameBase64":"%s"}\n' "$username" "$product" > "$path.tmp"
 mv "$path.tmp" "$path"

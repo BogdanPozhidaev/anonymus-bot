@@ -170,7 +170,7 @@ services:
     restart: unless-stopped
     environment:
       PANEL_BOT_USERNAME: ${PANEL_BOT_USERNAME:-}
-      PANEL_PRODUCT_NAME: ${PANEL_PRODUCT_NAME:-Панель Посредника}
+      PANEL_PRODUCT_NAME: ${PANEL_PRODUCT_NAME:-}
     networks:
       - proxy
     healthcheck:

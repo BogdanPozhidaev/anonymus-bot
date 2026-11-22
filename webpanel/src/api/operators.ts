@@ -29,3 +29,8 @@ export async function updateOperator(
 ): Promise<void> {
   await apiClient.patch(`/operators/${id}`, changes);
 }
+
+export async function resetOperatorPassword(id: number): Promise<CreateOperatorResponse> {
+  const response = await apiClient.post<CreateOperatorResponse>(`/operators/${id}/password/reset`);
+  return response.data;
+}

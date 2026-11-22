@@ -1,3 +1,4 @@
+import { sessionStatusMessages, usePanelLocale } from '../i18n/panelLocale';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -36,13 +37,6 @@ const statusColors: Record<SessionStatus, string> = {
   closed: 'gray',
 };
 
-const statusLabels: Record<SessionStatus, string> = {
-  active: 'Активна',
-  paused: 'На паузе',
-  pending_close: 'Ожидает закрытия',
-  closed: 'Закрыта',
-};
-
 const historyPageSize = 50;
 
 export function SessionDetailPage() {
@@ -51,6 +45,7 @@ export function SessionDetailPage() {
 }
 
 function SessionDetail({ sessionId }: { sessionId: number }) {
+  const { t } = usePanelLocale();
   const queryClient = useQueryClient();
   const [confirmClose, setConfirmClose] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -73,10 +68,10 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      notifications.show({ message: 'Статус обновлён', color: 'green' });
+      notifications.show({ message: t('statusUpdated'), color: 'green' });
     },
     onError: () => {
-      notifications.show({ message: 'Не удалось обновить статус', color: 'red' });
+      notifications.show({ message: t('statusUpdateFailed'), color: 'red' });
     },
   });
 
@@ -89,15 +84,15 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
       <Group justify="space-between">
         <Group>
           <Title order={2}>{session.title}</Title>
-          <Badge color={statusColors[session.status]}>{statusLabels[session.status]}</Badge>
+          <Badge color={statusColors[session.status]}>{t(sessionStatusMessages[session.status])}</Badge>
         </Group>
 
         <Select
-          placeholder="Изменить статус"
+          placeholder={t('changeStatus')}
           data={[
-            { value: 'active', label: 'Активна' },
-            { value: 'paused', label: 'На паузе' },
-            { value: 'closed', label: 'Закрыта' },
+            { value: 'active', label: t('sessionActive') },
+            { value: 'paused', label: t('sessionPaused') },
+            { value: 'closed', label: t('sessionClosed') },
           ]}
           value={session.status}
           disabled={statusMutation.isPending}
@@ -111,15 +106,16 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
           w={200}
         />
       </Group>
-      <Modal opened={confirmClose} onClose={() => setConfirmClose(false)} title="Закрыть сессию?">
+      <Modal opened={confirmClose} onClose={() => setConfirmClose(false)} title={t('closeSessionTitle')}
+        closeButtonProps={{ 'aria-label': t('closeDialog') }}>
         <Stack>
-          <Text>Участники больше не смогут отправлять сообщения в этой сессии.</Text>
+          <Text>{t('closeSessionEffect')}</Text>
           <Group justify="end">
-            <Button variant="default" onClick={() => setConfirmClose(false)}>Отмена</Button>
+            <Button variant="default" onClick={() => setConfirmClose(false)}>{t('cancel')}</Button>
             <Button color="red" onClick={() => {
               setConfirmClose(false);
               statusMutation.mutate('closed');
-            }}>Закрыть сессию</Button>
+            }}>{t('closeSession')}</Button>
           </Group>
         </Stack>
       </Modal>
@@ -127,24 +123,24 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
       {isAdmin && <SessionOwner sessionId={sessionId} ownerId={session.owner_operator_id} />}
       <Paper withBorder p="md">
         <Text fw={600} mb="sm">
-          Ссылки для подключения
+          {t('invitationLinks')}
         </Text>
         <Stack gap="xs">
-          <DeeplinkRow key={`${sessionId}-client`} label="Клиент" sessionId={sessionId} role="client" active={session.status === 'active'} connected={!!session.client_user_id} />
-          <DeeplinkRow key={`${sessionId}-executor`} label="Исполнитель" sessionId={sessionId} role="executor" active={session.status === 'active'} connected={!!session.executor_user_id} />
+          <DeeplinkRow key={`${sessionId}-client`} label={t('client')} sessionId={sessionId} role="client" active={session.status === 'active'} connected={!!session.client_user_id} />
+          <DeeplinkRow key={`${sessionId}-executor`} label={t('executor')} sessionId={sessionId} role="executor" active={session.status === 'active'} connected={!!session.executor_user_id} />
         </Stack>
       </Paper>
 
-      <Divider label="Переписка" />
+      <Divider label={t('conversation')} />
 
       <Paper withBorder p="md">
         {(offset > 0 || history?.has_more) && (
           <Group justify="end" mb="sm">
-            <Button variant="default" disabled={messagesLoading || !history?.has_more} onClick={() => setOffset(offset + historyPageSize)}>Ранние</Button>
-            <Button variant="default" disabled={messagesLoading || offset === 0} onClick={() => setOffset(offset - historyPageSize)}>Новые</Button>
+            <Button variant="default" disabled={messagesLoading || !history?.has_more} onClick={() => setOffset(offset + historyPageSize)}>{t('olderMessages')}</Button>
+            <Button variant="default" disabled={messagesLoading || offset === 0} onClick={() => setOffset(offset - historyPageSize)}>{t('newerMessages')}</Button>
           </Group>
         )}
-        {messagesError && <Text c="red">Не удалось загрузить сообщения</Text>}
+        {messagesError && <Text c="red">{t('messagesLoadFailed')}</Text>}
         {messagesLoading ? (
           <Loader size="sm" />
         ) : (
@@ -155,7 +151,7 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
               ))}
               {messages?.length === 0 && (
                 <Text c="dimmed" ta="center">
-                  Сообщений пока нет
+                  {t('noMessages')}
                 </Text>
               )}
             </Stack>
@@ -175,6 +171,7 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
 }
 
 function SessionOwner({ sessionId, ownerId }: { sessionId: number; ownerId: number | null }) {
+  const { t } = usePanelLocale();
   const queryClient = useQueryClient();
   const size = 50;
   const [offset, setOffset] = useState(0);
@@ -189,13 +186,13 @@ function SessionOwner({ sessionId, ownerId }: { sessionId: number; ownerId: numb
       queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
     },
-    onError: () => notifications.show({ message: 'Не удалось назначить оператора', color: 'red' }),
+    onError: () => notifications.show({ message: t('assignOperatorFailed'), color: 'red' }),
   });
   return (
     <Stack gap="xs">
-    <Select label="Ответственный оператор" value={ownerId?.toString() ?? null}
-      placeholder={ownerId === null ? undefined : `Оператор #${ownerId}`}
-      error={isError ? 'Не удалось загрузить список операторов' : undefined}
+    <Select label={t('assignedOperator')} value={ownerId?.toString() ?? null}
+      placeholder={ownerId === null ? undefined : t('operatorNumber', { id: ownerId })}
+      error={isError ? t('operatorListLoadFailed') : undefined}
       disabled={assign.isPending || !operators}
       data={(operators ?? []).map(op => ({ value: String(op.id), label: op.name, disabled: op.status !== 'active' }))}
       onChange={value => { if (value && Number(value) !== ownerId) assign.mutate(Number(value)); }}
@@ -208,6 +205,7 @@ function SessionOwner({ sessionId, ownerId }: { sessionId: number; ownerId: numb
 function ReplyComposer({ sessionId, clientConnected, executorConnected, onSend }: {
   sessionId: number; clientConnected: boolean; executorConnected: boolean; onSend: () => void;
 }) {
+  const { t } = usePanelLocale();
   const queryClient = useQueryClient();
   const [role, setRole] = useState<'client' | 'executor' | null>(null);
   const [text, setText] = useState('');
@@ -218,9 +216,9 @@ function ReplyComposer({ sessionId, clientConnected, executorConnected, onSend }
       setText('');
       onSend();
       queryClient.invalidateQueries({ queryKey: ['session-messages', sessionId] });
-      notifications.show({ message: 'Сообщение поставлено в очередь', color: 'green' });
+      notifications.show({ message: t('messageQueued'), color: 'green' });
     },
-    onError: () => notifications.show({ message: 'Не удалось поставить сообщение в очередь', color: 'red' }),
+    onError: () => notifications.show({ message: t('messageQueueFailed'), color: 'red' }),
   });
 
   return (
@@ -229,18 +227,18 @@ function ReplyComposer({ sessionId, clientConnected, executorConnected, onSend }
       if (role && recipientConnected && text.trim() && !send.isPending) send.mutate({ role, text: text.trim() });
     }}>
       <Stack gap="xs">
-        <Select label="Отправить от имени" value={role} disabled={send.isPending}
+        <Select label={t('sendAs')} value={role} disabled={send.isPending}
           onChange={value => { if (value === 'client' || value === 'executor') setRole(value); }}
           data={[
-            { value: 'client', label: 'Клиент', disabled: !executorConnected },
-            { value: 'executor', label: 'Исполнитель', disabled: !clientConnected },
+            { value: 'client', label: t('client'), disabled: !executorConnected },
+            { value: 'executor', label: t('executor'), disabled: !clientConnected },
           ]}
         />
-        <Textarea label="Сообщение" value={text} disabled={send.isPending} maxLength={4000}
+        <Textarea label={t('message')} value={text} disabled={send.isPending} maxLength={4000}
           onChange={event => setText(event.currentTarget.value)}
         />
         <Button type="submit" loading={send.isPending} disabled={!role || !recipientConnected || !text.trim()}>
-          Отправить
+          {t('send')}
         </Button>
       </Stack>
     </form>
@@ -254,6 +252,7 @@ function DeeplinkRow({ label, sessionId, role, active, connected }: {
   active: boolean;
   connected: boolean;
 }) {
+  const { t, locale } = usePanelLocale();
   const [invite, setInvite] = useState<{ token: string; expires_at: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const { botUsername } = panelConfig();
@@ -269,7 +268,7 @@ function DeeplinkRow({ label, sessionId, role, active, connected }: {
         setInvite(await issueSessionInvite(sessionId, role));
       }
     } catch {
-      notifications.show({ message: 'Не удалось изменить приглашение', color: 'red' });
+      notifications.show({ message: t('invitationChangeFailed'), color: 'red' });
     } finally {
       setBusy(false);
     }
@@ -282,27 +281,27 @@ function DeeplinkRow({ label, sessionId, role, active, connected }: {
           {label}:
         </Text>
         <Text size="sm" c="dimmed">
-          {connected ? '✓ Подключён' : 'Не подключён'}
+          {connected ? `✓ ${t('connected')}` : t('disconnected')}
         </Text>
       </Group>
       {!connected && (
         <Group gap="xs">
           {active && <Button size="xs" variant="light" disabled={busy || !botUsername} onClick={() => void changeInvite(false)}>
-            Выпустить новую ссылку
+            {t('newInvitation')}
           </Button>}
-          {active && !botUsername && <Text size="xs" c="dimmed">Имя бота не настроено</Text>}
+          {active && !botUsername && <Text size="xs" c="dimmed">{t('botNameMissing')}</Text>}
           <Button size="xs" variant="subtle" disabled={busy} onClick={() => void changeInvite(true)}>
-            Отозвать
+            {t('revoke')}
           </Button>
           {active && invite && link && (
-            <Text size="xs">До {new Date(invite.expires_at).toLocaleString()}</Text>
+            <Text size="xs">{t('invitationExpires', { date: new Date(invite.expires_at).toLocaleString(locale) })}</Text>
           )}
         </Group>
       )}
       {active && !connected && link && <CopyButton value={link}>
         {({ copied, copy }) => (
-          <Tooltip label={copied ? 'Скопировано' : 'Скопировать ссылку'}>
-            <ActionIcon color={copied ? 'teal' : 'blue'} onClick={copy}>
+          <Tooltip label={copied ? t('copied') : t('copyLink')}>
+            <ActionIcon color={copied ? 'teal' : 'blue'} onClick={copy} aria-label={copied ? t('copied') : t('copyLink')}>
               {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
             </ActionIcon>
           </Tooltip>
@@ -316,6 +315,7 @@ import { useEffect, useState } from 'react';
 import { apiClient } from '../api/client';
 
 function MediaImage({ messageId }: { messageId: number }) {
+  const { t } = usePanelLocale();
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
@@ -334,12 +334,13 @@ function MediaImage({ messageId }: { messageId: number }) {
     };
   }, [messageId]);
 
-  if (!src) return <Text size="xs" c="dimmed">Загрузка фото…</Text>;
+  if (!src) return <Text size="xs" c="dimmed">{t('loadingPhoto')}</Text>;
 
-  return <img src={src} alt="Фото" style={{ maxWidth: 250, borderRadius: 4, display: 'block' }} />;
+  return <img src={src} alt={t('photo')} style={{ maxWidth: 250, borderRadius: 4, display: 'block' }} />;
 }
 
 function MediaAudio({ messageId }: { messageId: number }) {
+  const { t } = usePanelLocale();
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
@@ -358,32 +359,33 @@ function MediaAudio({ messageId }: { messageId: number }) {
     };
   }, [messageId]);
 
-  if (!src) return <Text size="xs" c="dimmed">Загрузка аудио…</Text>;
+  if (!src) return <Text size="xs" c="dimmed">{t('loadingAudio')}</Text>;
 
   return <audio controls src={src} style={{ maxWidth: 250 }} />;
 }
 
 function MessageRow({ message }: { message: import('../types/api').Message }) {
+  const { t, locale } = usePanelLocale();
   const role = message.impersonated_role ?? message.sender_role;
-  const senderLabel = role === 'client' ? 'Клиент' : 'Исполнитель';
+  const senderLabel = role === 'client' ? t('client') : t('executor');
   const align = role === 'client' ? 'flex-start' : 'flex-end';
 
   return (
     <Group justify={align === 'flex-start' ? 'flex-start' : 'flex-end'}>
       <Paper p="xs" withBorder maw="70%" bg={message.sender_role === 'client' ? 'gray.0' : 'blue.0'}>
         <Text size="xs" fw={600} c="dimmed">
-          {message.sent_by_operator ? `Оператор от имени: ${senderLabel.toLowerCase()}` : senderLabel}
+          {message.sent_by_operator ? t('sentByOperator', { role: senderLabel.toLocaleLowerCase(locale) }) : senderLabel}
         </Text>
         {message.content_type === 'photo' && <MediaImage messageId={message.id} />}
         {message.content_type === 'voice' && <MediaAudio messageId={message.id} />}
         {message.content && <Text size="sm">{message.content}</Text>}
         <Text size="xs" c="dimmed" mt={4}>
-          {new Date(message.created_at).toLocaleTimeString('ru-RU')}
-          {message.delivery_status === 'failed' && ' · ошибка доставки'}
-          {message.delivery_status === 'retrying' && ' · повторная попытка'}
-          {message.delivery_status === 'queued' && ' · ожидает доставки'}
-          {message.delivery_status === 'delivered' && message.delivered && ' · доставлено'}
-          {message.delivery_status === 'legacy_unknown' && ' · доставка не подтверждена'}
+          {new Date(message.created_at).toLocaleTimeString(locale)}
+          {message.delivery_status === 'failed' && ` · ${t('deliveryFailed')}`}
+          {message.delivery_status === 'retrying' && ` · ${t('deliveryRetry')}`}
+          {message.delivery_status === 'queued' && ` · ${t('deliveryQueued')}`}
+          {message.delivery_status === 'delivered' && message.delivered && ` · ${t('delivered')}`}
+          {message.delivery_status === 'legacy_unknown' && ` · ${t('deliveryUnknown')}`}
         </Text>
       </Paper>
     </Group>

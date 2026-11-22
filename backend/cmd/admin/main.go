@@ -69,6 +69,9 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err := auth.ValidateNewPassword(password); err != nil {
+			return err
+		}
 		hash, err := auth.HashPassword(password)
 		if err != nil {
 			return errors.New("could not hash bootstrap password")

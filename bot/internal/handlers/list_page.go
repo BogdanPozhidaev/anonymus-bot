@@ -12,14 +12,14 @@ func parsePageOffset(value string) (int, bool) {
 	return offset, err == nil && offset >= 0 && offset <= 1000000 && offset%backendclient.MenuPageSize == 0
 }
 
-func pageButtons(prefix string, offset int, hasMore bool) []tgbotapi.InlineKeyboardButton {
+func pageButtons(prefix string, offset int, hasMore bool, user *tgbotapi.User) []tgbotapi.InlineKeyboardButton {
 	const size = backendclient.MenuPageSize
 	var buttons []tgbotapi.InlineKeyboardButton
 	if offset >= size {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("Назад", prefix+strconv.Itoa(offset-size)))
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData(tr(user, "Назад", "Back"), prefix+strconv.Itoa(offset-size)))
 	}
 	if hasMore && offset <= 1000000-size {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("Вперёд", prefix+strconv.Itoa(offset+size)))
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData(tr(user, "Вперёд", "Next"), prefix+strconv.Itoa(offset+size)))
 	}
 	return buttons
 }

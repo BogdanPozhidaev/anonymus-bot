@@ -52,10 +52,16 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	}
 	req := botclient.SendMessageRequest{
 		RecipientTelegramID: item.RecipientTelegramID, SessionID: item.SessionID, ContentType: item.ContentType,
-		FileID: item.FileID, Text: item.Content, SenderLabel: "Клиент:",
+		FileID: item.FileID, Text: item.Content, SenderLabel: "Клиент:", Language: item.Language,
 	}
 	if item.SenderRole == "executor" {
 		req.SenderLabel = "Менеджер:"
+	}
+	if item.Language == "en" {
+		req.SenderLabel = "Client:"
+		if item.SenderRole == "executor" {
+			req.SenderLabel = "Manager:"
+		}
 	}
 	if item.Notice {
 		req.SessionID = 0
@@ -63,6 +69,9 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		req.FileID = ""
 		req.SenderLabel = ""
 		req.Text = "Не удалось подтвердить доставку сообщения после нескольких попыток. Обратитесь к оператору."
+		if item.Language == "en" {
+			req.Text = "We could not confirm delivery after several attempts. Contact an operator."
+		}
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	sendErr := w.bot.SendMessage(sendCtx, req)

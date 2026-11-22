@@ -107,6 +107,8 @@ func TestHandlerCommandsAndCallbacks(t *testing.T) {
 			}
 		case strings.HasSuffix(r.URL.Path, "/stop"):
 			_, _ = fmt.Fprint(w, `{"session_id":3,"counterpart_telegram_id":2}`)
+		case r.URL.Path == "/internal/users/by-telegram/2":
+			_, _ = fmt.Fprint(w, `{"language_code":"en"}`)
 		default:
 			t.Errorf("unexpected route %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -161,7 +163,7 @@ func TestHandlerCommandsAndCallbacks(t *testing.T) {
 	f.expect(t, "https://panel.example.invalid/sessions/3")
 	NewStopHandler(f.bot, f.backend, f.logger).Handle(ctx, m)
 	f.expect(t)
-	f.expect(t)
+	f.expect(t, "The other person asked to end the conversation.")
 	NewStartHandler(f.bot, f.backend, f.logger).Handle(ctx, m)
 	f.expect(t, "Спасибо")
 	NewHelpHandler(f.bot, f.logger).Handle(m)

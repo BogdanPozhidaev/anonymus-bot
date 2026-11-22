@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 )
@@ -54,14 +55,15 @@ func requireInternalToken(token string) gin.HandlerFunc {
 }
 
 const (
-	contextKeyOperatorID = "operator_id"
-	contextKeyRole       = "operator_role"
+	contextKeyOperatorID  = "operator_id"
+	contextKeyRole        = "operator_role"
+	contextKeyAuthVersion = "operator_auth_version"
 )
 
 // requireAuth проверяет наличие валидной сессии оператора в заголовке
 // Authorization: Bearer <token>. При успехе кладёт operator_id и role
 // в контекст запроса для последующего использования хендлерами.
-func (s *Server) requireAuth() gin.HandlerFunc {
+func (s *Server) requireAuth(allowPasswordChange bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractSessionToken(c)
 		if token == "" {
@@ -70,19 +72,24 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 		}
 
 		data, err := s.sessionService.Get(c.Request.Context(), token)
+		restricted := allowPasswordChange && errors.Is(err, redis.Nil)
+		if restricted {
+			data, err = s.sessionService.GetPasswordChange(c.Request.Context(), token)
+		}
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
 			return
 		}
 
-		role, status, version, err := s.operatorRepo.GetAuthState(c.Request.Context(), data.OperatorID)
-		if err != nil || status != models.OperatorStatusActive || version != data.AuthVersion || role != data.Role {
+		role, status, version, mustChange, err := s.operatorRepo.GetAuthState(c.Request.Context(), data.OperatorID)
+		if err != nil || status != models.OperatorStatusActive || version != data.AuthVersion || role != data.Role || mustChange != restricted {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
 			return
 		}
 
 		c.Set(contextKeyOperatorID, data.OperatorID)
 		c.Set(contextKeyRole, role)
+		c.Set(contextKeyAuthVersion, version)
 		c.Next()
 	}
 }

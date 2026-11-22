@@ -12,6 +12,7 @@ export interface LoginResponse {
 
 export interface VerifyTotpResponse {
   session_token: string;
+  password_change_required?: boolean;
   operator_id: number;
   role: OperatorRole;
 }

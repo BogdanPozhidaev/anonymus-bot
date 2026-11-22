@@ -18,7 +18,11 @@ Use the [roadmap](../DEVELOPMENT_ROADMAP.md) and
 results and a GitHub Actions run on a PR are separate pieces of release
 evidence.
 
-To complete independent acceptance, give a reviewer the reviewed PR
+## Deferred independent acceptance
+
+The project owner deferred this check because an independent reviewer
+was unavailable. The isolated deployment and sign-in passed locally.
+When a reviewer is available, give them the reviewed PR
 commit and this guide. Have them follow the [isolated HTTP deployment
 instructions](DEPLOYMENT.md#start-an-isolated-http-stand) from a clean
 checkout using only fixture credentials. Record any instruction they

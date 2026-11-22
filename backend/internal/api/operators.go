@@ -34,7 +34,7 @@ type createOperatorRequest struct {
 	Language string `json:"language"`
 }
 
-type createOperatorResponse struct {
+type temporaryPasswordResponse struct {
 	ID                int64  `json:"id"`
 	Login             string `json:"login"`
 	TemporaryPassword string `json:"temporary_password"`
@@ -64,11 +64,16 @@ func (s *Server) handleGetOperatorByTelegramID(c *gin.Context) {
 		return
 	}
 
+	if operator.MustChangePassword {
+		c.JSON(http.StatusNotFound, gin.H{"error": "operator not found"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":     operator.ID,
-		"name":   operator.Name,
-		"role":   operator.Role,
-		"status": operator.Status,
+		"id":       operator.ID,
+		"name":     operator.Name,
+		"role":     operator.Role,
+		"status":   operator.Status,
+		"language": operator.Language,
 	})
 }
 
@@ -119,18 +124,14 @@ func (s *Server) handleListOperators(c *gin.Context) {
 }
 
 func (s *Server) handleCreateOperator(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	var req createOperatorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
-	tempPassword, err := generateTemporaryPassword()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate temporary password"})
-		return
-	}
-
+	tempPassword := rand.Text()
 	passwordHash, err := auth.HashPassword(tempPassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
@@ -145,13 +146,14 @@ func (s *Server) handleCreateOperator(c *gin.Context) {
 	creatorID, _ := getOperatorID(c)
 
 	newOperator := &models.Operator{
-		Name:         req.Name,
-		Login:        req.Login,
-		Role:         req.Role,
-		Status:       models.OperatorStatusInvited,
-		PasswordHash: &passwordHash,
-		Language:     language,
-		CreatedBy:    &creatorID,
+		Name:               req.Name,
+		Login:              req.Login,
+		Role:               req.Role,
+		Status:             models.OperatorStatusInvited,
+		MustChangePassword: true,
+		PasswordHash:       &passwordHash,
+		Language:           language,
+		CreatedBy:          &creatorID,
 	}
 	if req.Email != "" {
 		newOperator.Email = &req.Email
@@ -165,28 +167,68 @@ func (s *Server) handleCreateOperator(c *gin.Context) {
 
 	s.writeAuditLog(c, creatorID, "operator", "operator_created", "operator", newOperator.ID, gin.H{"login": req.Login, "role": req.Role})
 
-	c.JSON(http.StatusCreated, createOperatorResponse{
+	c.JSON(http.StatusCreated, temporaryPasswordResponse{
 		ID:                newOperator.ID,
 		Login:             newOperator.Login,
 		TemporaryPassword: tempPassword,
 	})
 }
 
-func generateTemporaryPassword() (string, error) {
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
-	const length = 16
-
-	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+// handleResetOperatorPassword godoc
+// @Summary Issue a temporary password for another operator
+// @Tags operators
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Operator ID"
+// @Success 200 {object} temporaryPasswordResponse
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/operators/{id}/password/reset [post]
+func (s *Server) handleResetOperatorPassword(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || targetID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid operator id"})
+		return
 	}
-
-	password := make([]byte, length)
-	for i, b := range bytes {
-		password[i] = charset[int(b)%len(charset)]
+	adminID := c.GetInt64(contextKeyOperatorID)
+	if targetID == adminID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "use the self-service password change for your own account"})
+		return
 	}
-
-	return string(password), nil
+	ctx := c.Request.Context()
+	target, err := s.operatorRepo.GetByID(ctx, targetID)
+	if errors.Is(err, repository.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "operator not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not load operator"})
+		return
+	}
+	if target.Status != models.OperatorStatusActive && target.Status != models.OperatorStatusInvited {
+		c.JSON(http.StatusConflict, gin.H{"error": "operator is not eligible for password reset"})
+		return
+	}
+	temporary := rand.Text()
+	hash, err := auth.HashPassword(temporary)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not reset password"})
+		return
+	}
+	changed, err := s.operatorRepo.ResetPassword(ctx, adminID, c.GetInt64(contextKeyAuthVersion), targetID, target.AuthVersion, hash)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not reset password"})
+		return
+	}
+	if !changed {
+		c.JSON(http.StatusConflict, gin.H{"error": "operator or administrator state changed"})
+		return
+	}
+	s.writeAuditLog(c, adminID, "operator", "operator_password_reset", "operator", targetID, nil)
+	c.JSON(http.StatusOK, temporaryPasswordResponse{ID: targetID, Login: target.Login, TemporaryPassword: temporary})
 }
 
 func (s *Server) handleUpdateOperator(c *gin.Context) {
@@ -216,17 +258,11 @@ func (s *Server) handleUpdateOperator(c *gin.Context) {
 
 	wasDisabled := operator.Status == models.OperatorStatusDisabled
 
-	if req.Name != nil {
-		operator.Name = *req.Name
-	}
-	if req.Role != nil {
-		operator.Role = *req.Role
-	}
-	if req.Status != nil {
-		operator.Status = *req.Status
-	}
-
-	if err := s.operatorRepo.Update(ctx, operator); err != nil {
+	if err := s.operatorRepo.UpdateProfile(ctx, operator.ID, operator.AuthVersion, req.Name, req.Role, req.Status); err != nil {
+		if errors.Is(err, repository.ErrLastActiveAdmin) {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot remove the last active administrator"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update operator"})
 		return
 	}

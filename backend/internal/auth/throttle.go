@@ -51,10 +51,16 @@ func ReserveLoginAttempt(ctx context.Context, client *redis.Client, login, ip st
 	return time.Duration(retry) * time.Millisecond, err
 }
 
-func (s *PendingAuthService) ReserveAttempt(ctx context.Context, token string, operatorID, authVersion int64) (time.Duration, error) {
+func ReservePasswordChangeAttempt(ctx context.Context, client *redis.Client, operatorID int64) (time.Duration, error) {
+	key := fmt.Sprintf("auth_attempt:password_change:%d", operatorID)
+	retry, err := loginAttempts.Run(ctx, client, []string{key}, 5, authWindow.Milliseconds()).Int64()
+	return time.Duration(retry) * time.Millisecond, err
+}
+
+func (s *PendingAuthService) ReserveAttempt(ctx context.Context, token string, operatorID, authVersion int64, recovery bool) (time.Duration, error) {
 	digest := sha256.Sum256([]byte(token))
 	keys := []string{pendingAuthKey(token), fmt.Sprintf("auth_attempt:totp_pending:%x", digest), fmt.Sprintf("auth_attempt:totp_operator:%d", operatorID)}
-	retry, err := totpAttempts.Run(ctx, s.redisClient, keys, 5, 0, 10, authWindow.Milliseconds(), pendingAuthValue(operatorID, authVersion)).Int64()
+	retry, err := totpAttempts.Run(ctx, s.redisClient, keys, 5, 0, 10, authWindow.Milliseconds(), pendingAuthValue(operatorID, authVersion, recovery)).Int64()
 	if err == nil && retry < 0 {
 		return 0, redis.Nil
 	}

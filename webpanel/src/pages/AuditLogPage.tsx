@@ -1,3 +1,4 @@
+import { usePanelLocale } from '../i18n/panelLocale';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Table, Title, Button, Group, TextInput, Loader, Text, Code, Alert } from '@mantine/core';
@@ -7,6 +8,7 @@ import { notifications } from '@mantine/notifications';
 import { listAuditLog, downloadAuditLogCsv, type AuditLogFilters } from '../api/auditLog';
 
 export function AuditLogPage() {
+  const { t, locale } = usePanelLocale();
   const pageSize = 100;
   const [filters, setFilters] = useState<AuditLogFilters>({ limit: pageSize, offset: 0 });
   const [actionFilter, setActionFilter] = useState('');
@@ -27,50 +29,50 @@ export function AuditLogPage() {
     try {
       await downloadAuditLogCsv(filters);
     } catch {
-      notifications.show({ message: 'Не удалось экспортировать', color: 'red' });
+      notifications.show({ message: t('exportFailed'), color: 'red' });
     }
   };
 
   return (
     <>
       <Group justify="space-between" mb="md">
-        <Title order={2}>Аудит действий</Title>
+        <Title order={2}>{t('auditTitle')}</Title>
         <Button leftSection={<IconDownload size={18} />} onClick={handleExport} variant="light">
-          Экспорт страницы CSV
+          {t('exportPage')}
         </Button>
       </Group>
 
       <Group mb="md">
         <TextInput
-          placeholder="Фильтр по действию (например, session_status_updated)"
+          placeholder={t('actionFilter')}
           value={actionFilter}
           onChange={(e) => setActionFilter(e.currentTarget.value)}
           w={350}
         />
         <Button onClick={handleFilterApply} variant="default">
-          Применить
+          {t('apply')}
         </Button>
       </Group>
 
       {isError ? (
-        <Alert color="red">Не удалось загрузить журнал</Alert>
+        <Alert color="red">{t('auditLoadFailed')}</Alert>
       ) : isLoading ? (
         <Loader />
       ) : (
         <Table striped highlightOnHover>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Время</Table.Th>
-              <Table.Th>Actor ID</Table.Th>
-              <Table.Th>Действие</Table.Th>
-              <Table.Th>Цель</Table.Th>
-              <Table.Th>Детали</Table.Th>
+              <Table.Th>{t('time')}</Table.Th>
+              <Table.Th>{t('actorId')}</Table.Th>
+              <Table.Th>{t('action')}</Table.Th>
+              <Table.Th>{t('target')}</Table.Th>
+              <Table.Th>{t('details')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {entries?.map((entry) => (
               <Table.Tr key={entry.id}>
-                <Table.Td>{new Date(entry.timestamp).toLocaleString('ru-RU')}</Table.Td>
+                <Table.Td>{new Date(entry.timestamp).toLocaleString(locale)}</Table.Td>
                 <Table.Td>{entry.actor_id == null ? entry.actor_type : `${entry.actor_type} #${entry.actor_id}`}</Table.Td>
                 <Table.Td>{entry.action}</Table.Td>
                 <Table.Td>
@@ -93,16 +95,16 @@ export function AuditLogPage() {
 
       <Group mt="md">
         <Button variant="default" disabled={offset === 0 || isLoading} onClick={() => setFilters({ ...filters, offset: offset - pageSize })}>
-          Назад
+          {t('back')}
         </Button>
         <Button variant="default" disabled={!data?.has_more || offset >= 1000000} onClick={() => setFilters({ ...filters, offset: offset + pageSize })}>
-          Далее
+          {t('nextPage')}
         </Button>
       </Group>
 
       {entries?.length === 0 && (
         <Text c="dimmed" ta="center" mt="xl">
-          Записей не найдено
+          {t('noEntries')}
         </Text>
       )}
     </>

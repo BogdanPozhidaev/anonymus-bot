@@ -69,8 +69,28 @@ func (s *SessionService) Create(ctx context.Context, data SessionData) (string, 
 // Get возвращает данные сессии по токену. Возвращает redis.Nil (через
 // errors.Is), если сессия не найдена или истекла/была отозвана.
 func (s *SessionService) Get(ctx context.Context, token string) (*SessionData, error) {
-	key := sessionKey(token)
+	return s.get(ctx, sessionKey(token))
+}
 
+const passwordChangeTTL = 5 * time.Minute
+
+func (s *SessionService) CreatePasswordChange(ctx context.Context, data SessionData) (string, error) {
+	token := uuid.New().String()
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	if err := s.redisClient.Set(ctx, passwordChangeKey(token), payload, passwordChangeTTL).Err(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *SessionService) GetPasswordChange(ctx context.Context, token string) (*SessionData, error) {
+	return s.get(ctx, passwordChangeKey(token))
+}
+
+func (s *SessionService) get(ctx context.Context, key string) (*SessionData, error) {
 	payload, err := s.redisClient.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
@@ -87,8 +107,7 @@ func (s *SessionService) Get(ctx context.Context, token string) (*SessionData, e
 // Revoke немедленно удаляет сессию — используется при disable оператора
 // или логауте.
 func (s *SessionService) Revoke(ctx context.Context, token string) error {
-	key := sessionKey(token)
-	return s.redisClient.Del(ctx, key).Err()
+	return s.redisClient.Del(ctx, sessionKey(token), passwordChangeKey(token)).Err()
 }
 
 // RevokeAllForOperator отзывает все активные сессии конкретного оператора.
@@ -113,6 +132,10 @@ func (s *SessionService) RevokeAllForOperator(ctx context.Context, operatorID in
 
 func sessionKey(token string) string {
 	return fmt.Sprintf("session:%s", token)
+}
+
+func passwordChangeKey(token string) string {
+	return "password_change_session:" + token
 }
 
 func operatorSessionsIndexKey(operatorID int64) string {
@@ -149,13 +172,21 @@ func (s *PendingAuthService) DecodeTOTP(encoded string) (secret string, legacy b
 }
 
 func (s *PendingAuthService) CreateEnrollment(ctx context.Context, operatorID, version int64, secret string) (string, error) {
+	return s.createEnrollment(ctx, operatorID, version, secret, false)
+}
+
+func (s *PendingAuthService) CreateRecoveryEnrollment(ctx context.Context, operatorID, version int64, secret string) (string, error) {
+	return s.createEnrollment(ctx, operatorID, version, secret, true)
+}
+
+func (s *PendingAuthService) createEnrollment(ctx context.Context, operatorID, version int64, secret string, recovery bool) (string, error) {
 	encoded, err := s.EncodeTOTP(secret)
 	if err != nil {
 		return "", err
 	}
 	token := uuid.New().String()
 	_, err = s.redisClient.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, pendingAuthKey(token), pendingAuthValue(operatorID, version), s.ttl)
+		pipe.Set(ctx, pendingAuthKey(token), pendingAuthValue(operatorID, version, recovery), s.ttl)
 		pipe.Set(ctx, pendingEnrollmentKey(token), encoded, s.ttl)
 		return nil
 	})
@@ -170,32 +201,37 @@ func (s *PendingAuthService) CreatePending(ctx context.Context, operatorID, auth
 	token := uuid.New().String()
 	key := pendingAuthKey(token)
 
-	if err := s.redisClient.Set(ctx, key, pendingAuthValue(operatorID, authVersion), s.ttl).Err(); err != nil {
+	if err := s.redisClient.Set(ctx, key, pendingAuthValue(operatorID, authVersion, false), s.ttl).Err(); err != nil {
 		return "", fmt.Errorf("failed to store pending auth: %w", err)
 	}
 
 	return token, nil
 }
 
-func pendingAuthValue(operatorID, authVersion int64) string {
-	return fmt.Sprintf("%d:%d", operatorID, authVersion)
+func pendingAuthValue(operatorID, authVersion int64, recovery bool) string {
+	value := fmt.Sprintf("%d:%d", operatorID, authVersion)
+	if recovery {
+		return value + ":recovery"
+	}
+	return value
 }
 
-func (s *PendingAuthService) GetState(ctx context.Context, token string) (int64, int64, error) {
+func (s *PendingAuthService) GetState(ctx context.Context, token string) (int64, int64, bool, error) {
 	value, err := s.redisClient.Get(ctx, pendingAuthKey(token)).Result()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
+	value, recovery := strings.CutSuffix(value, ":recovery")
 	idPart, versionPart, ok := strings.Cut(value, ":")
 	if !ok {
-		return 0, 0, redis.Nil
+		return 0, 0, false, redis.Nil
 	}
 	id, idErr := strconv.ParseInt(idPart, 10, 64)
 	version, versionErr := strconv.ParseInt(versionPart, 10, 64)
 	if idErr != nil || versionErr != nil || id <= 0 || version <= 0 {
-		return 0, 0, redis.Nil
+		return 0, 0, false, redis.Nil
 	}
-	return id, version, nil
+	return id, version, recovery, nil
 }
 
 func (s *PendingAuthService) Consume(ctx context.Context, token string) error {

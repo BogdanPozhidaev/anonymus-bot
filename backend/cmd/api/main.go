@@ -76,6 +76,27 @@ func newHTTPServer(port string, handler http.Handler) *http.Server {
 	}
 }
 
+func isInternalRequest(c *gin.Context) bool {
+	path := c.Request.URL.Path
+	return path == "/internal" || strings.HasPrefix(path, "/internal/")
+}
+
+func newAPIRouter(logger *slog.Logger) *gin.Engine {
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Skip: isInternalRequest}))
+	r.Use(func(c *gin.Context) {
+		c.Next()
+		if isInternalRequest(c) {
+			logger.Info("internal API request", "method", c.Request.Method, "route", c.FullPath(), "status", c.Writer.Status())
+		}
+	})
+	r.Use(gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, _ any) {
+		logger.Error("API handler panicked", "method", c.Request.Method, "route", c.FullPath())
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
+	return r
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -144,7 +165,7 @@ func main() {
 		cfg.PhotosDir, cfg.VoiceDir,
 	)
 	go delivery.New(messageRepo, botClient, logger).Run(context.Background())
-	r := gin.Default()
+	r := newAPIRouter(logger)
 	if err := configureClientIP(r, cfg.TrustedProxyIP); err != nil {
 		logger.Error("invalid trusted proxy configuration", "error", err)
 		os.Exit(1)

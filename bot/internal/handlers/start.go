@@ -32,20 +32,22 @@ func (h *StartHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 }
 
 func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.Message, payload string) {
-	const unavailable = "Приглашение недоступно. Запросите новую ссылку у оператора и откройте её в личном чате с ботом."
+	unavailable := tr(message.From, "Приглашение недоступно. Запросите новую ссылку у оператора и откройте её в личном чате с ботом.",
+		"This invitation is unavailable. Ask the operator for a new link and open it in a private chat with the bot.")
 	if !validInvitePayload(payload) || !message.Chat.IsPrivate() || message.From == nil {
 		h.sendMessage(message.Chat.ID, unavailable)
 		return
 	}
 	resp, err := h.backend.BindSession(ctx, backendclient.BindSessionRequest{
 		TelegramID: message.From.ID, Username: message.From.UserName, FirstName: message.From.FirstName, Token: payload,
+		LanguageCode: languageOf(message.From),
 	})
 	if err != nil {
 		if errors.Is(err, backendclient.ErrNotFound) {
 			h.sendMessage(message.Chat.ID, unavailable)
 		} else {
 			h.logger.Error("failed to redeem session invitation")
-			h.sendNeutralGreeting(message.Chat.ID)
+			h.sendNeutralGreeting(message.Chat.ID, message.From)
 		}
 		return
 	}
@@ -55,7 +57,8 @@ func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.
 		"role", resp.SessionType,
 	)
 
-	greeting := "Здравствуйте! Вы подключены к сессии в компании «Посредник». Ваши сообщения будут переданы менеджеру."
+	greeting := tr(message.From, "Здравствуйте! Вы подключены к сессии в компании «Посредник». Ваши сообщения будут переданы менеджеру.",
+		"Hello! You have joined the session. Your messages will be sent to the manager.")
 	h.sendMessage(message.Chat.ID, greeting)
 
 }
@@ -75,11 +78,12 @@ func (h *StartHandler) handleWithoutPayload(ctx context.Context, message *tgbota
 		h.logger.Error("failed to create incoming request", "error", err)
 	}
 
-	h.sendNeutralGreeting(message.Chat.ID)
+	h.sendNeutralGreeting(message.Chat.ID, message.From)
 }
 
-func (h *StartHandler) sendNeutralGreeting(chatID int64) {
-	text := "Спасибо за обращение в компанию «Посредник». Ваш запрос принят, менеджер свяжется с вами."
+func (h *StartHandler) sendNeutralGreeting(chatID int64, user *tgbotapi.User) {
+	text := tr(user, "Спасибо за обращение в компанию «Посредник». Ваш запрос принят, менеджер свяжется с вами.",
+		"Thank you for contacting us. A manager will get back to you.")
 	h.sendMessage(chatID, text)
 }
 

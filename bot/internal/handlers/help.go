@@ -34,10 +34,7 @@ const helpTextEN = `Available commands:
 If you have a question — just type it, and we'll pass it to the manager.`
 
 func (h *HelpHandler) Handle(message *tgbotapi.Message) {
-	text := helpTextRU
-	if message.From.LanguageCode == "en" {
-		text = helpTextEN
-	}
+	text := tr(message.From, helpTextRU, helpTextEN)
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
 	if _, err := h.bot.Send(msg); err != nil {

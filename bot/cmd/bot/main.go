@@ -68,6 +68,7 @@ func main() {
 	}()
 
 	handleUpdate := func(ctx context.Context, update tgbotapi.Update) {
+		update = handlers.LocalizeUpdate(ctx, backend, update)
 		if update.CallbackQuery != nil {
 			switch {
 			case strings.HasPrefix(update.CallbackQuery.Data, "set_lang:"):
@@ -105,6 +106,8 @@ func main() {
 				languageHandler.HandleCommand(update.Message)
 			case "operator":
 				operatorHandler.Handle(ctx, update.Message)
+			case "link":
+				operatorHandler.HandleLink(ctx, update.Message)
 			case "sessions":
 				sessionsListHandler.HandleSessionsCommand(ctx, update.Message)
 			case "current":

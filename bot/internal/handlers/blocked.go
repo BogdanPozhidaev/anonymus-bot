@@ -56,7 +56,7 @@ func DetectBlockedType(message *tgbotapi.Message) string {
 func (h *BlockedContentHandler) Handle(message *tgbotapi.Message, blockedType string) {
 	h.logger.Info("blocked unsupported content type", "content_type", blockedType)
 
-	msg := tgbotapi.NewMessage(message.Chat.ID, blockedContentText)
+	msg := tgbotapi.NewMessage(message.Chat.ID, tr(message.From, blockedContentText, "This message type is temporarily unsupported. Send text, a voice message, or a photo."))
 	if _, err := h.bot.Send(msg); err != nil {
 		h.logger.Error("failed to send blocked content notice")
 	}

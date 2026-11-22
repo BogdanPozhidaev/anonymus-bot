@@ -91,6 +91,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 		internal.GET("/users/by-telegram/:telegramID", s.handleGetUserByTelegramID)
 		internal.PATCH("/users/by-telegram/:telegramID/language", s.handleUpdateUserLanguage)
 		internal.GET("/operators/by-telegram/:telegramID", s.handleGetOperatorByTelegramID)
+		internal.POST("/operators/telegram-link/claim", s.handleClaimTelegramLink)
 		internal.POST("/messages/relay", s.handleRelayMessage)
 		internal.GET("/users/by-telegram/:telegramID/sessions", s.handleListUserSessions)
 		internal.PATCH("/users/by-telegram/:telegramID/active-session", s.handleSwitchActiveSession)
@@ -105,13 +106,19 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 		// Публичные эндпоинты аутентификации — без requireAuth
 		apiGroup.POST("/auth/login", s.handleLogin)
 		apiGroup.POST("/auth/totp/verify", s.handleVerifyTOTP)
+		apiGroup.POST("/auth/totp/recover", s.handleRecoverTOTP)
 
 		// Всё остальное в /api требует валидной сессии
-		authenticated := apiGroup.Group("")
-		authenticated.Use(s.requireAuth())
-		{
-			authenticated.POST("/auth/logout", s.handleLogout)
+		credentials := apiGroup.Group("", s.requireAuth(true))
+		credentials.POST("/auth/logout", s.handleLogout)
+		credentials.POST("/auth/password", s.handleChangePassword)
 
+		authenticated := apiGroup.Group("", s.requireAuth(false))
+		{
+			authenticated.POST("/auth/totp/recovery-codes", s.handleIssueRecoveryCodes)
+			authenticated.GET("/account/telegram-link", s.handleTelegramLinkStatus)
+			authenticated.POST("/account/telegram-link", s.handleBeginTelegramLink)
+			authenticated.POST("/account/telegram-link/confirm", s.handleConfirmTelegramLink)
 			authenticated.GET("/sessions", s.handleListSessions)
 			authenticated.GET("/sessions/:id", s.handleGetSession)
 			authenticated.POST("/sessions", s.handleCreateSession)
@@ -132,6 +139,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 				adminOnly.GET("/operators", s.handleListOperators)
 				adminOnly.POST("/operators", s.handleCreateOperator)
 				adminOnly.PATCH("/operators/:id", s.handleUpdateOperator)
+				adminOnly.POST("/operators/:id/password/reset", s.handleResetOperatorPassword)
 			}
 
 		}

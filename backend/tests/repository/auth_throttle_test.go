@@ -37,21 +37,24 @@ func TestTOTPEnrollmentRequiresConfirmationAndEncryptsSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operator := models.Operator{Name: "Enrollment fixture", Login: "fixture-enrollment", Role: "operator", Status: "invited", Language: "en", PasswordHash: &hash}
+	operator := models.Operator{Name: "Enrollment fixture", Login: "fixture-enrollment", Role: "operator", Status: "invited", Language: "en", PasswordHash: &hash, MustChangePassword: true}
 	if err := operators.Create(ctx, &operator); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	api.NewServer(pool, client, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, nil, operators,
+	api.NewServer(pool, client, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, repository.NewSessionRepository(pool), nil, operators,
 		nil, repository.NewAuditLogRepository(pool), nil, auth.NewSessionService(client), pending, nil, "", "").RegisterRoutes(router, strings.Repeat("a", 64))
-	call := func(route string, payload map[string]string, want int) []byte {
+	call := func(method, route, token string, payload map[string]string, want int) []byte {
 		t.Helper()
 		body, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		req := httptest.NewRequest(http.MethodPost, route, strings.NewReader(string(body)))
+		req := httptest.NewRequest(method, route, strings.NewReader(string(body)))
 		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		if response.Code != want {
@@ -64,24 +67,33 @@ func TestTOTPEnrollmentRequiresConfirmationAndEncryptsSecret(t *testing.T) {
 		Secret string `json:"totp_secret"`
 		Status string `json:"status"`
 	}
-	login := func() challenge {
+	login := func(password string) challenge {
 		t.Helper()
 		var result challenge
-		if err := json.Unmarshal(call("/api/auth/login", map[string]string{"login": operator.Login, "password": password}, http.StatusOK), &result); err != nil {
+		if err := json.Unmarshal(call(http.MethodPost, "/api/auth/login", "", map[string]string{"login": operator.Login, "password": password}, http.StatusOK), &result); err != nil {
 			t.Fatal(err)
 		}
 		return result
 	}
-	first, second := login(), login()
+	first, second := login(password), login(password)
 	if first.Status != "totp_setup_required" || first.Secret == "" || first.Secret == second.Secret {
 		t.Fatal("enrollment attempts did not receive independent secrets")
 	}
 	if stored, err := pending.Enrollment(ctx, first.Token); err != nil || strings.Contains(stored, first.Secret) {
 		t.Fatal("temporary enrollment secret is missing or present in plaintext")
 	}
-	verify := func(c challenge, code string, want int) {
+	type issuedSession struct {
+		Token      string `json:"session_token"`
+		Restricted bool   `json:"password_change_required"`
+	}
+	verify := func(c challenge, code string, want int) issuedSession {
 		t.Helper()
-		call("/api/auth/totp/verify", map[string]string{"pending_token": c.Token, "code": code}, want)
+		result := call(http.MethodPost, "/api/auth/totp/verify", "", map[string]string{"pending_token": c.Token, "code": code}, want)
+		var issued issuedSession
+		if want == http.StatusOK && (json.Unmarshal(result, &issued) != nil || issued.Token == "") {
+			t.Fatal("verified sign-in did not receive a session token")
+		}
+		return issued
 	}
 	verify(first, "invalid", http.StatusUnauthorized)
 	get := func() *models.Operator {
@@ -103,7 +115,15 @@ func TestTOTPEnrollmentRequiresConfirmationAndEncryptsSecret(t *testing.T) {
 		}
 		return code
 	}
-	verify(first, generate(first.Secret), http.StatusOK)
+	limited := verify(first, generate(first.Secret), http.StatusOK)
+	if !limited.Restricted {
+		t.Fatal("temporary password received a full session")
+	}
+	call(http.MethodGet, "/api/sessions", limited.Token, nil, http.StatusUnauthorized)
+	call(http.MethodGet, "/api/operators", limited.Token, nil, http.StatusUnauthorized)
+	if ttl := client.TTL(ctx, "password_change_session:"+limited.Token).Val(); ttl <= 0 || ttl > 5*time.Minute {
+		t.Fatalf("unexpected restricted session TTL: %s", ttl)
+	}
 	op := get()
 	if op.Status != "active" || op.TOTPSecret == nil || op.LastLoginAt == nil || op.AuthVersion == operator.AuthVersion {
 		t.Fatal("confirmed enrollment did not activate and timestamp the account")
@@ -116,11 +136,29 @@ func TestTOTPEnrollmentRequiresConfirmationAndEncryptsSecret(t *testing.T) {
 		t.Fatal("completed enrollment still has temporary secret material")
 	}
 	verify(second, generate(second.Secret), http.StatusUnauthorized)
-	ordinary := login()
+	ordinary := login(password)
 	if ordinary.Status != "totp_required" || ordinary.Secret != "" {
 		t.Fatal("returning operator was prompted to enroll or received a secret")
 	}
-	verify(ordinary, generate(first.Secret), http.StatusOK)
+	secondLimited := verify(ordinary, generate(first.Secret), http.StatusOK)
+	if !secondLimited.Restricted {
+		t.Fatal("repeated sign-in bypassed mandatory password change")
+	}
+	const replacement = "synthetic-replacement-password"
+	change := map[string]string{"current_password": password, "new_password": replacement}
+	call(http.MethodPost, "/api/auth/password", limited.Token, change, http.StatusNoContent)
+	if got := get(); got.MustChangePassword {
+		t.Fatal("changing the password did not clear the stored requirement")
+	}
+	for _, token := range []string{limited.Token, secondLimited.Token} {
+		call(http.MethodPost, "/api/auth/password", token, change, http.StatusUnauthorized)
+	}
+	call(http.MethodPost, "/api/auth/login", "", map[string]string{"login": operator.Login, "password": password}, http.StatusUnauthorized)
+	full := verify(login(replacement), generate(first.Secret), http.StatusOK)
+	if full.Restricted {
+		t.Fatal("new permanent password received a restricted session")
+	}
+	call(http.MethodGet, "/api/sessions", full.Token, nil, http.StatusOK)
 }
 
 func setupThrottleRedis(t *testing.T) *redis.Client {
@@ -198,7 +236,7 @@ func TestRedisAuthAttemptLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 		for j := range 6 {
-			retry, err := pending.ReserveAttempt(ctx, token, 1, 1)
+			retry, err := pending.ReserveAttempt(ctx, token, 1, 1, false)
 			if err != nil || (retry > 0) != (i == 2 || j == 5) {
 				t.Fatalf("TOTP reservation %d/%d: %v, %v", i, j, retry, err)
 			}
@@ -206,7 +244,7 @@ func TestRedisAuthAttemptLimits(t *testing.T) {
 		if err := pending.Consume(ctx, token); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pending.ReserveAttempt(ctx, token, 1, 1); !errors.Is(err, redis.Nil) {
+		if _, err := pending.ReserveAttempt(ctx, token, 1, 1, false); !errors.Is(err, redis.Nil) {
 			t.Fatalf("consumed token: %v", err)
 		}
 	}

@@ -17,10 +17,11 @@ import (
 )
 
 type bindSessionRequest struct {
-	TelegramID int64  `json:"telegram_id" binding:"required"`
-	Username   string `json:"username"`
-	FirstName  string `json:"first_name"`
-	Token      string `json:"token" binding:"required"`
+	TelegramID   int64  `json:"telegram_id" binding:"required"`
+	Username     string `json:"username"`
+	FirstName    string `json:"first_name"`
+	Token        string `json:"token" binding:"required"`
+	LanguageCode string `json:"language_code,omitempty" binding:"omitempty,oneof=ru en"`
 }
 
 type bindSessionResponse struct {
@@ -70,6 +71,9 @@ func (s *Server) handleBindSession(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	user := &models.User{TelegramID: req.TelegramID, LanguageCode: "ru"}
+	if req.LanguageCode != "" {
+		user.LanguageCode = req.LanguageCode
+	}
 	if req.Username != "" {
 		user.Username = &req.Username
 	}
@@ -625,6 +629,10 @@ func (s *Server) handleListOperatorSessionsInternal(c *gin.Context) {
 		return
 	}
 
+	if operator.MustChangePassword {
+		c.JSON(http.StatusNotFound, gin.H{"error": "operator not found"})
+		return
+	}
 	sessions, err := s.sessionRepo.ListPanelPage(ctx, &operator.ID, "", "", page.Limit+1, page.Offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})

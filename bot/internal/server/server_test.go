@@ -101,6 +101,25 @@ func TestBotHealthDoesNotSendTelegramMessages(t *testing.T) {
 	}
 }
 
+func TestDeliveryReplyButtonUsesRecipientLanguage(t *testing.T) {
+	token := strings.Repeat("a", 64)
+	for language, label := range map[string]string{"en": "Reply here", "ru": "Ответить сюда", "": "Ответить сюда"} {
+		sender := &recordingSender{}
+		req := httptest.NewRequest(http.MethodPost, "/internal/send-message", strings.NewReader(
+			`{"recipient_telegram_id":1,"session_id":2,"text":"fixture","language":"`+language+`"}`))
+		req.Header.Set("X-Internal-Token", token)
+		res := httptest.NewRecorder()
+		New(sender, 0, nil, token, "", "", "").handler().ServeHTTP(res, req)
+		if res.Code != http.StatusOK || len(sender.messages) != 1 {
+			t.Fatalf("unexpected delivery response: %d", res.Code)
+		}
+		markup := sender.messages[0].(tgbotapi.MessageConfig).ReplyMarkup.(tgbotapi.InlineKeyboardMarkup)
+		if button := markup.InlineKeyboard[0][0]; button.Text != label || *button.CallbackData != "switch_session:2" {
+			t.Fatal("incorrect localized reply button")
+		}
+	}
+}
+
 func TestSessionAlertsLinkDirectlyToHTTPSPanel(t *testing.T) {
 	token := strings.Repeat("a", 64)
 	for _, fixture := range []struct{ base, url string }{

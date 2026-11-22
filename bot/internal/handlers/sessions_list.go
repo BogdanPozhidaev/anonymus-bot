@@ -31,6 +31,13 @@ var statusLabelsRU = map[string]string{
 	"pending_close": "ожидает закрытия",
 }
 
+func sessionStatusLabel(sender *tgbotapi.User, status string) string {
+	if label := statusLabelsRU[status]; label != "" {
+		return tr(sender, label, strings.ReplaceAll(status, "_", " "))
+	}
+	return status
+}
+
 var roleLabelsRU = map[string]string{
 	"client":   "клиент",
 	"executor": "исполнитель",
@@ -40,35 +47,35 @@ func (h *SessionsListHandler) HandleSessionsCommand(ctx context.Context, message
 	if message.From == nil || message.Chat == nil || !message.Chat.IsPrivate() {
 		return
 	}
-	h.showPage(ctx, message.Chat.ID, message.From.ID, 0)
+	h.showPage(ctx, message.Chat.ID, message.From, 0)
 }
 
 func (h *SessionsListHandler) HandlePageCallback(ctx context.Context, callback *tgbotapi.CallbackQuery) {
 	offset, ok := parsePageOffset(strings.TrimPrefix(callback.Data, sessionsPagePrefix))
 	if !ok || callback.From == nil || callback.Message == nil || callback.Message.Chat == nil || !callback.Message.Chat.IsPrivate() {
-		h.answerCallback(callback.ID, "Ошибка")
+		h.answerCallback(callback.ID, tr(callback.From, "Ошибка", "Error"))
 		return
 	}
 	h.answerCallback(callback.ID, "")
-	h.showPage(ctx, callback.Message.Chat.ID, callback.From.ID, offset)
+	h.showPage(ctx, callback.Message.Chat.ID, callback.From, offset)
 }
 
-func (h *SessionsListHandler) showPage(ctx context.Context, chatID, senderID int64, offset int) {
-	sessions, hasMore, err := h.backend.ListUserSessions(ctx, senderID, offset)
+func (h *SessionsListHandler) showPage(ctx context.Context, chatID int64, sender *tgbotapi.User, offset int) {
+	sessions, hasMore, err := h.backend.ListUserSessions(ctx, sender.ID, offset)
 	if err != nil {
 		h.logger.Error("failed to list user sessions", "error", err)
-		h.sendMessage(chatID, "Не удалось загрузить список сессий. Попробуйте позже.")
+		h.sendMessage(chatID, tr(sender, "Не удалось загрузить список сессий. Попробуйте позже.", "Unable to load your sessions. Try again later."))
 		return
 	}
 
 	if len(sessions) == 0 && offset == 0 {
-		h.sendMessage(chatID, "У вас пока нет активных сессий.")
+		h.sendMessage(chatID, tr(sender, "У вас пока нет активных сессий.", "You have no active sessions yet."))
 		return
 	}
 
-	msg := tgbotapi.NewMessage(chatID, "Ваши сессии:")
-	keyboard := buildSessionsKeyboard(sessions)
-	if buttons := pageButtons(sessionsPagePrefix, offset, hasMore); len(buttons) > 0 {
+	msg := tgbotapi.NewMessage(chatID, tr(sender, "Ваши сессии:", "Your sessions:"))
+	keyboard := buildSessionsKeyboard(sessions, sender)
+	if buttons := pageButtons(sessionsPagePrefix, offset, hasMore, sender); len(buttons) > 0 {
 		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, buttons)
 	}
 	msg.ReplyMarkup = keyboard
@@ -78,7 +85,7 @@ func (h *SessionsListHandler) showPage(ctx context.Context, chatID, senderID int
 	}
 }
 
-func buildSessionsKeyboard(sessions []backendclient.UserSessionListItem) tgbotapi.InlineKeyboardMarkup {
+func buildSessionsKeyboard(sessions []backendclient.UserSessionListItem, sender *tgbotapi.User) tgbotapi.InlineKeyboardMarkup {
 	var rows [][]tgbotapi.InlineKeyboardButton
 
 	for _, s := range sessions {
@@ -87,8 +94,8 @@ func buildSessionsKeyboard(sessions []backendclient.UserSessionListItem) tgbotap
 			indicator = "✓ "
 		}
 
-		roleLabel := roleLabelsRU[s.Role]
-		statusLabel := statusLabelsRU[s.Status]
+		roleLabel := tr(sender, roleLabelsRU[s.Role], s.Role)
+		statusLabel := sessionStatusLabel(sender, s.Status)
 
 		label := fmt.Sprintf("%s%s (%s, %s)", indicator, menuExcerpt(s.Title), roleLabel, statusLabel)
 		callbackData := switchSessionCallbackPrefix + strconv.FormatInt(s.SessionID, 10)
@@ -102,23 +109,27 @@ func buildSessionsKeyboard(sessions []backendclient.UserSessionListItem) tgbotap
 }
 
 func (h *SessionsListHandler) HandleSwitchCallback(ctx context.Context, callback *tgbotapi.CallbackQuery) {
+	if callback.From == nil || callback.Message == nil || callback.Message.Chat == nil || !callback.Message.Chat.IsPrivate() {
+		h.answerCallback(callback.ID, tr(callback.From, "Ошибка", "Error"))
+		return
+	}
 	sessionIDStr := strings.TrimPrefix(callback.Data, switchSessionCallbackPrefix)
 	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
 	if err != nil {
-		h.logger.Warn("invalid session id in switch callback", "data", callback.Data)
-		h.answerCallback(callback.ID, "Ошибка")
+		h.logger.Warn("invalid session id in switch callback")
+		h.answerCallback(callback.ID, tr(callback.From, "Ошибка", "Error"))
 		return
 	}
 
 	if err := h.backend.SwitchActiveSession(ctx, callback.From.ID, sessionID); err != nil {
-		h.logger.Error("failed to switch session", "error", err, "telegram_id", callback.From.ID, "session_id", sessionID)
-		h.answerCallback(callback.ID, "Не удалось переключиться на эту сессию")
+		h.logger.Error("failed to switch session", "error", err, "session_id", sessionID)
+		h.answerCallback(callback.ID, tr(callback.From, "Не удалось переключиться на эту сессию", "Unable to switch to this session"))
 		return
 	}
 
-	h.answerCallback(callback.ID, "Сессия переключена")
+	h.answerCallback(callback.ID, tr(callback.From, "Сессия переключена", "Session switched"))
 
-	edit := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, callback.Message.MessageID, "Активная сессия изменена.")
+	edit := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, callback.Message.MessageID, tr(callback.From, "Активная сессия изменена.", "Active session changed."))
 	if _, err := h.bot.Send(edit); err != nil {
 		h.logger.Error("failed to edit message after switch")
 	}
@@ -131,21 +142,21 @@ func (h *SessionsListHandler) HandleCurrentCommand(ctx context.Context, message 
 	sessions, _, err := h.backend.ListUserSessions(ctx, message.From.ID, 0)
 	if err != nil {
 		h.logger.Error("failed to list user sessions for current", "error", err)
-		h.sendMessage(message.Chat.ID, "Не удалось получить текущую сессию.")
+		h.sendMessage(message.Chat.ID, tr(message.From, "Не удалось получить текущую сессию.", "Unable to load the current session."))
 		return
 	}
 
 	for _, s := range sessions {
 		if s.IsCurrent {
-			roleLabel := roleLabelsRU[s.Role]
-			statusLabel := statusLabelsRU[s.Status]
-			text := fmt.Sprintf("Текущая сессия: %s (%s, %s)", s.Title, roleLabel, statusLabel)
+			roleLabel := tr(message.From, roleLabelsRU[s.Role], s.Role)
+			statusLabel := sessionStatusLabel(message.From, s.Status)
+			text := fmt.Sprintf(tr(message.From, "Текущая сессия: %s (%s, %s)", "Current session: %s (%s, %s)"), s.Title, roleLabel, statusLabel)
 			h.sendMessage(message.Chat.ID, text)
 			return
 		}
 	}
 
-	h.sendMessage(message.Chat.ID, "У вас нет выбранной активной сессии. Используйте /sessions для выбора.")
+	h.sendMessage(message.Chat.ID, tr(message.From, "У вас нет выбранной активной сессии. Используйте /sessions для выбора.", "No active session selected. Use /sessions to choose one."))
 }
 
 func (h *SessionsListHandler) answerCallback(callbackID, text string) {

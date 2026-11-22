@@ -22,6 +22,7 @@ type SendMessageRequest struct {
 	SenderLabel         string `json:"sender_label"`
 	Text                string `json:"text"`
 	SessionID           int64  `json:"session_id"`
+	Language            string `json:"language"`
 }
 
 type AlertButton struct {
@@ -107,8 +108,12 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	var keyboard any
 	if req.SessionID > 0 {
+		replyLabel := "Ответить сюда"
+		if req.Language == "en" {
+			replyLabel = "Reply here"
+		}
 		keyboard = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Ответить сюда", "switch_session:"+strconv.FormatInt(req.SessionID, 10)),
+			tgbotapi.NewInlineKeyboardButtonData(replyLabel, "switch_session:"+strconv.FormatInt(req.SessionID, 10)),
 		))
 	}
 	var msg tgbotapi.Chattable

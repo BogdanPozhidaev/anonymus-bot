@@ -72,6 +72,11 @@ Backend предоставляет два семейства эндпоинто�
 | POST | `/api/operators` |
 | PATCH | `/api/operators/:id` |
 
+`PATCH /api/operators/:id` accepts the `admin` and `operator` roles.
+A role change invalidates the affected operator's existing authentication.
+The API returns HTTP 409 if a role or status change would leave no active
+administrator.
+
 ## Входящие обращения
 
 | Метод | Путь |
@@ -140,6 +145,72 @@ record returns HTTP 201 and sends an operator alert. A reused record
 returns HTTP 200 with the existing ID. The first private text sent to
 the bot without a selected session fills the open request's empty
 first-message field. Later text leaves that field intact.
+
+## Password change
+
+`POST /api/auth/password` requires an authenticated operator session,
+the current password and a replacement. The replacement must contain
+at least 12 characters, fit in 72 UTF-8 bytes, contain no control
+characters and differ from the current password. Up to five current
+password checks per operator are allowed in five minutes, separately
+from login.
+HTTP 204 indicates success. Existing sessions and pending sign-ins are
+then invalidated. The next sign-in still requires TOTP.
+
+After verifying TOTP for an account with a temporary password,
+`POST /api/auth/totp/verify` returns `password_change_required: true`.
+The accompanying five-minute bearer token works only for password
+change and logout. After a successful change, sign in again with
+the permanent password and the same authenticator.
+
+`POST /api/operators/:id/password/reset` requires an administrator
+session and resets another active or invited operator's password.
+The response returns the generated password once with
+`Cache-Control: no-store`. The backend saves the hash, marks the
+password for mandatory change and invalidates older sessions and
+pending sign-ins in the same update. Existing TOTP enrollment is
+preserved. The audit entry records the administrator and the target.
+
+## TOTP recovery
+
+- `POST /api/auth/totp/recovery-codes` requires a full operator session,
+  the current password and a valid TOTP. It issues eight codes once in
+  a no-store response. PostgreSQL stores only their digests. Reissuing
+  codes invalidates earlier codes, sessions and pending sign-ins.
+- `POST /api/auth/totp/recover` requires a pending token from the password
+  step of sign-in and one recovery code. It consumes the password
+  challenge even when the submitted recovery code is invalid. On
+  success it consumes the code and returns a fresh five-minute TOTP
+  enrollment challenge without granting panel access. The login and
+  recovery code submission endpoints use the existing attempt limits.
+- Confirm the new authenticator using `POST /api/auth/totp/verify`.
+  Successful confirmation replaces the encrypted secret and revokes
+  earlier sessions, pending sign-ins and unused recovery codes.
+  The previous authenticator remains usable until confirmation.
+  An unused code is needed to restart an interrupted recovery.
+
+## Operator Telegram linking
+
+| Method | Path | Required access | Success |
+|---|---|---|---|
+| GET | `/api/account/telegram-link` | Operator session | 200 with `linked` |
+| POST | `/api/account/telegram-link` | Operator session | 201 with `code` |
+| POST | `/internal/operators/telegram-link/claim` | Bot service token | 200 with `confirmation_code` |
+| POST | `/api/account/telegram-link/confirm` | Initiating operator account | 204 |
+
+The bot sends `code` and the private sender's `telegram_id` in the claim
+body. The panel sends the bot's confirmation code as `code`. Codes are
+single-use and share the original five-minute expiration. Issuing a new
+code replaces the pending challenge. Auth version changes invalidate
+pending challenges. A missing or expired challenge returns 404 and an
+account already linked to another operator returns 409. Responses
+include `Cache-Control: no-store`. The audit event
+`operator_telegram_linked` records the operator's internal ID.
+
+The internal user lookup returns `language_code`. The internal operator
+lookup returns `language`. The language update endpoint supports
+`ru` and `en`. It updates an existing participant profile or a linked
+active operator profile and returns 404 when neither exists.
 
 ## Operator audit
 

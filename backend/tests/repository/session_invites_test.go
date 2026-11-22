@@ -136,7 +136,7 @@ func TestSessionInvitationLifecycle(t *testing.T) {
 		nil, nil, repository.NewMessageRepository(pool), nil, nil, nil, nil, nil, "", "")
 	serviceToken := strings.Repeat("a", 64)
 	server.RegisterRoutes(router, serviceToken)
-	body, err := json.Marshal(map[string]any{"telegram_id": 104, "token": base64.RawURLEncoding.EncodeToString(raw)})
+	body, err := json.Marshal(map[string]any{"telegram_id": 104, "token": base64.RawURLEncoding.EncodeToString(raw), "language_code": "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,5 +150,9 @@ func TestSessionInvitationLifecycle(t *testing.T) {
 			strings.Contains(response.Body.String(), "other direction") {
 			t.Fatalf("unexpected bind response, status = %d, want %d", response.Code, want)
 		}
+	}
+	bound, err := users.GetByTelegramID(ctx, 104)
+	if err != nil || bound.LanguageCode != "en" {
+		t.Fatalf("bind did not persist the new user's language: %v", err)
 	}
 }

@@ -20,6 +20,7 @@ func TestInternalRoutesRequireServiceToken(t *testing.T) {
 		{"GET", "/internal/users/by-telegram/1"},
 		{"PATCH", "/internal/users/by-telegram/1/language"},
 		{"GET", "/internal/operators/by-telegram/1"},
+		{"POST", "/internal/operators/telegram-link/claim"},
 		{"POST", "/internal/messages/relay"},
 		{"GET", "/internal/users/by-telegram/1/sessions"},
 		{"PATCH", "/internal/users/by-telegram/1/active-session"},

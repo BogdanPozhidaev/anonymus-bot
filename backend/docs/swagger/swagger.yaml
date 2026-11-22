@@ -1,5 +1,15 @@
 basePath: /
 definitions:
+  api.changePasswordRequest:
+    properties:
+      current_password:
+        type: string
+      new_password:
+        type: string
+    required:
+    - current_password
+    - new_password
+    type: object
   api.createSessionRequest:
     properties:
       language:
@@ -8,6 +18,17 @@ definitions:
         type: string
     required:
     - title
+    type: object
+  api.issueRecoveryCodesRequest:
+    properties:
+      code:
+        maxLength: 16
+        type: string
+      password:
+        type: string
+    required:
+    - code
+    - password
     type: object
   api.loginRequest:
     properties:
@@ -33,6 +54,17 @@ definitions:
       totp_secret:
         type: string
     type: object
+  api.recoverTOTPRequest:
+    properties:
+      pending_token:
+        type: string
+      recovery_code:
+        maxLength: 64
+        type: string
+    required:
+    - pending_token
+    - recovery_code
+    type: object
   api.sendAsOperatorRequest:
     properties:
       content:
@@ -50,6 +82,15 @@ definitions:
     - content
     - content_type
     - impersonated_role
+    type: object
+  api.temporaryPasswordResponse:
+    properties:
+      id:
+        type: integer
+      login:
+        type: string
+      temporary_password:
+        type: string
     type: object
   api.updateSessionStatusRequest:
     properties:
@@ -76,6 +117,8 @@ definitions:
     properties:
       operator_id:
         type: integer
+      password_change_required:
+        type: boolean
       role:
         type: string
       session_token:
@@ -185,6 +228,123 @@ paths:
               type: string
             type: object
       summary: Логин оператора
+      tags:
+      - auth
+  /api/auth/password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Current and new passwords
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.changePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Change the signed-in operator's password and revoke existing sessions
+      tags:
+      - auth
+  /api/auth/totp/recover:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Password-verified challenge and recovery code
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.recoverTOTPRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loginResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Exchange a one-time recovery code for a new TOTP enrollment
+      tags:
+      - auth
+  /api/auth/totp/recovery-codes:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Current password and TOTP code
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.issueRecoveryCodesRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                type: string
+              type: array
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Replace recovery codes after confirming the current password and TOTP
       tags:
       - auth
   /api/auth/totp/verify:
@@ -298,6 +458,50 @@ paths:
       security:
       - BearerAuth: []
       summary: Список операторов
+      tags:
+      - operators
+  /api/operators/{id}/password/reset:
+    post:
+      parameters:
+      - description: Operator ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.temporaryPasswordResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Issue a temporary password for another operator
       tags:
       - operators
   /api/sessions:

@@ -298,6 +298,189 @@ Use this file as an append-only record of verified work. Add date, task/issue ID
   gate reported API 76.1% (836/1099), auth 78.0% (78/100), moderation
   100.0% (46/46) and handlers 75.5% (351/465).
 
+## 2026-11-22 — P1 acceptance and password change
+
+- The project owner reported all GitHub checks green for the preceding
+  P1 changes. Accepted P1-12 and P1-13 on that basis. The exact run
+  link was not supplied. Accepted P1-14 with the independent
+  documentation-only deployment recorded as debt at the owner's request.
+- P1-5. Added operator self-service password change in the panel and
+  API. Bootstrap and self-service use a minimum of 12 characters and
+  bcrypt's 72-byte UTF-8 ceiling. Existing accounts retain their
+  current passwords until they choose to change them.
+- `go test ./tests/repository -run '^TestPasswordChangeRevokesSessionsAndPendingChallenges$' -race -count=1`
+  passed with temporary PostgreSQL and Redis. It checked authentication,
+  invalid and incorrect passwords, stale writes, revocation of two
+  sessions and a pending TOTP challenge, sanitized audit, throttling,
+  and sign-in with the new password and the same authenticator.
+- Full backend `go test ./... -race -count=1` with the CI coverage
+  profile passed. Reported coverage was API 75.8%, auth 79.2% and
+  moderation 100%. Frontend lint, typecheck and production build
+  passed. Isolated Chrome with a synthetic API checked password
+  confirmation, an incorrect current password and sign-out after success.
+- P1-5 still requires forced change of temporary passwords, an
+  administrator reset flow and TOTP reset/recovery codes. The current
+  changes used no new migration or working-stand deployment.
+
+## 2026-11-22 — P1-5 Temporary password rotation
+
+- Migration 000008 adds the mandatory-change flag and initializes it
+  for existing invited accounts. New panel-created operator accounts
+  set the flag. Existing active accounts keep the ordinary sign-in flow.
+- A verified temporary-password sign-in receives a five-minute token
+  in a separate Redis namespace. It permits only password change and
+  logout. Changing the password clears the flag and advances the
+  authentication version in the same database write.
+- The targeted repository race tests passed on disposable PostgreSQL
+  and Redis. They checked the full migration round trip, migration
+  from version 7 with active and invited accounts, TOTP enrollment,
+  restricted route rejection and TTL, successful change, invalidated
+  tokens and a new full sign-in with the same authenticator.
+- Panel lint, typecheck and production build passed. Isolated Chrome
+  confirmed the redirect after TOTP, direct URL restrictions, password
+  validation and sign-out after the change. Swagger was regenerated.
+- Full backend `go test ./... -race -count=1` with the CI coverage profile
+  passed. Reported coverage was API 75.8%, auth 78.9% and moderation 100%.
+  The server wiring test also passed with the new invitation assertion.
+  golangci-lint v2.11.4 reported zero issues.
+- Administrator password reset and TOTP reset/recovery are still
+  open. The migration ran only on test databases.
+
+## 2026-11-22 — P1-5 Administrator password reset
+
+- Added password reset for another active or invited operator. The
+  administrator receives a generated password in a no-store response.
+  PostgreSQL updates the hash, rotation requirement and authentication
+  version together. Existing TOTP enrollment is preserved. The audit
+  entry identifies the administrator and target without recording the
+  password.
+- `go test ./tests/repository -run '^TestAdministratorPasswordResetRequiresRotationAndPreservesTOTP$' -race -count=1`
+  passed using temporary PostgreSQL and Redis. It checked authorization,
+  self-reset and suspended-account refusals, a stale write, password
+  storage and audit, revocation, existing TOTP and required rotation.
+- Panel lint, typecheck and production build passed. Isolated Chrome
+  verified the available targets, cancellation, one authenticated
+  request and removal of the displayed temporary password on close.
+  Swagger was regenerated. The feature uses the existing migration 000008.
+- Full backend `go test ./... -race -count=1` with the CI coverage profile
+  passed. Coverage was API 76.1%, auth 78.9% and moderation 100%.
+  golangci-lint v2.11.4 reported zero issues.
+- TOTP reset and recovery codes remain open. The working deployment
+  was outside these checks.
+
+## 2026-11-22 — P1-5 TOTP recovery
+
+- Migration 000009 adds a table for recovery-code digests. A signed-in
+  operator can issue eight codes after verifying the current password
+  and TOTP. Replacing codes revokes earlier sessions and challenges.
+- Password sign-in and one recovery code issue a five-minute enrollment
+  challenge. PostgreSQL consumes each code once, including during
+  concurrent attempts. The old factor remains usable until the new
+  factor is confirmed. Confirmation replaces the encrypted secret and
+  revokes the previous sessions, challenges and remaining codes.
+- Targeted repository tests with `-race -count=1` passed on temporary
+  PostgreSQL and Redis. They checked issuance, replay, concurrency,
+  unchanged TOTP before confirmation, revoked access afterward,
+  audit without secrets and all migrations up, down and up.
+- Panel lint, typecheck and production build passed. Isolated Chrome
+  verified code display and cleanup, recovery, new QR enrollment and
+  the transition to the panel only after TOTP confirmation.
+  The Nginx rate-limit route passed `nginx -t` in a disposable
+  container. Swagger was regenerated.
+- The full backend `go test ./... -race -count=1` and coverage gate
+  passed. Coverage was API 76.4%, auth 81.3% and moderation 100%.
+  golangci-lint v2.11.4 reported zero issues. A subsequent targeted
+  race run passed after moving the recovery audit to the database
+  confirmation point, before issuing the new session.
+- Recovery requires the current password and an unused recovery code.
+  The feature provides no fallback when both the authenticator and
+  all recovery codes are lost. Migration ran only on test databases.
+
+## 2026-11-22 — P1-8 bot language and operator linking
+
+- Private replies and delivery notices use the recipient's stored
+  Russian or English language. The bot uses the Telegram language
+  hint before a profile exists. Participant preferences take
+  precedence when the same account is linked as an operator.
+  Shared operator group notices use Russian.
+- The panel issues a five-minute challenge. A private `/link` command
+  claims it, and the panel confirms the code returned by the bot.
+  PostgreSQL stores code digests, limits each Telegram account to one
+  operator, and keeps the previous binding until replacement succeeds.
+  Expired challenges become unusable immediately and are purged by
+  retention. Internal HTTP access logs record route templates.
+- Repository tests with `-race -count=1` passed for linking, invitation
+  language at bind, outbox retry, and migration round trip. They covered
+  service authentication, a second operator's refusal, code replay,
+  expiry, suspension, relinking and expired-code cleanup with dry-run.
+  `go test ./cmd/api ./internal/api -race -count=1` passed, including
+  the follow-up check for redaction on normal responses and panics.
+- Full backend and bot test suites passed with the CI race and coverage
+  flags. Coverage was API 76.3%, auth 81.3%, moderation 100%, and
+  bot handlers 77.6%. Go formatting, build, vet and golangci-lint
+  v2.11.4 passed for both modules.
+- Panel lint, typecheck and production build passed. Isolated Chrome
+  with a fake API verified code issuance and replacement, invalid
+  confirmation, status refresh and code cleanup after success.
+  Migration 000010 ran on disposable databases. Live Telegram,
+  the scheduled retention service and deployment were outside this run.
+
+## 2026-11-22 — P1-7 browser tests
+
+- Added Playwright 1.62.1 coverage for the built panel using synthetic
+  API responses. The tests check unsuccessful and successful TOTP,
+  history and loaded photo/audio previews, send-as after a recipient
+  joins, both admin route guards, and the login flow at 375 px.
+- `npm run test:e2e -- --repeat-each=3` passed in local Chromium with
+  `CI=true` (nine passes). `npm run lint`, `npm run typecheck` and
+  `docker build --tag anonymus-panel-e2e-check:local webpanel` passed.
+- Frontend CI installs Chromium and runs `npm run test:e2e`, which
+  includes the production build. actionlint 1.7.12 accepted
+  `.github/workflows/frontend-ci.yml`. The new workflow awaits a
+  GitHub PR run. The suite uses no running backend, Telegram, or
+  deployment data.
+
+## 2026-11-22 — P1-7 panel localization
+
+- Added Russian and English for panel navigation, login and recovery,
+  sessions, incoming requests, operator management, and audit controls.
+  The switcher is available before and after sign-in. The preference
+  is stored in the browser and updates document language and date
+  formatting. Configured branding retains its supplied text.
+- With `CI=true`, `npm run test:e2e -- --repeat-each=2` passed all ten
+  runs. It checked the media and reply flow in each language and
+  preference persistence and translation of an existing TOTP error.
+  `npm run lint` and `npm run typecheck` also passed.
+- `docker compose config --quiet` passed. Built the panel with
+  `docker build --tag anonymus-panel-i18n-check:local webpanel` and
+  verified the runtime configuration with and without a custom product
+  name in disposable containers. The running stand was outside this
+  check.
+
+## 2026-11-22 — P1-7 dashboard and operator role editor
+
+- Added the dashboard as the start page after sign-in. It shows up to
+  five recent sessions and five new requests using the existing API.
+  The backend limits ordinary operators to their assigned sessions.
+  The dashboard and mobile menu support both panel languages.
+- Administrators can confirm an operator role change in the panel.
+  PostgreSQL serializes changes that can alter the active administrator
+  set. The API returns HTTP 409 if a role or status update would remove
+  the last active administrator. The existing auth-version trigger
+  invalidates the affected operator's sessions on a role change.
+- PostgreSQL and Redis fixtures verified role revocation, the last-admin
+  refusal, concurrent role and status updates, and the session scope of
+  an ordinary operator. Playwright checked the role dialog, dashboard
+  navigation and empty/error states, mobile access and cache clearing
+  after sign-out. With `CI=true`, `npm run test:e2e -- --repeat-each=2`
+  passed all 18 runs. `npm run lint`, `npm run typecheck`, the panel
+  Docker build, `go vet ./...` and golangci-lint 2.11.4 passed.
+- Full backend `go test ./... -race -count=1` passed with the CI
+  coverage flags. Coverage was API 76.4%, auth 81.3%, and moderation
+  100%. Separate Docker builds of the panel and backend passed.
+  No new migration is needed. No working-stand or GitHub PR run was
+  part of this verification.
+
 ## Entry template
 ### YYYY-MM-DD — [ID] Short title
 - **Status:** planned / in progress / completed / blocked

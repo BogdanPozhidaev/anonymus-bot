@@ -1,3 +1,6 @@
+import { usePanelLocale } from '../i18n/panelLocale';
+import type { MessageKey } from '../i18n/messages';
+import { LanguageSelector } from '../components/LanguageSelector';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TextInput, PasswordInput, Button, Paper, Title, Stack, Text, Image, Alert } from '@mantine/core';
@@ -5,27 +8,32 @@ import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import QRCode from 'qrcode';
 import { isAxiosError } from 'axios';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { login, verifyTotp } from '../api/auth';
+import { login, recoverTotp, verifyTotp } from '../api/auth';
+import type { LoginResponse } from '../types/api';
 import { useAuthStore } from '../stores/authStore';
-import { panelConfig } from '../panelConfig';
 
-type Step = 'credentials' | 'totp' | 'totp_setup';
+type Step = 'credentials' | 'totp' | 'totp_setup' | 'recovery';
 
-function authErrorMessage(error: unknown, fallback: string) {
-  if (!isAxiosError(error)) return fallback;
+type LoginError = { key: MessageKey; seconds?: number };
+
+function authErrorMessage(error: unknown, fallback: MessageKey): LoginError {
+  if (!isAxiosError(error)) return { key: fallback };
   if (error.response?.status === 429) {
     const seconds = Number(error.response.headers['retry-after']);
     return Number.isFinite(seconds) && seconds > 0
-      ? `Слишком много попыток. Повторите вход через ${seconds} сек.`
-      : 'Слишком много попыток. Повторите вход позже.';
+      ? { key: 'loginRateLimitSeconds', seconds }
+      : { key: 'loginRateLimit' };
   }
-  if (error.response?.status === 503) return 'Вход временно недоступен. Попробуйте позже.';
-  return fallback;
+  if (error.response?.status === 503) return { key: 'loginUnavailable' };
+  return { key: fallback };
 }
 
 export function LoginPage() {
+  const { t, productName } = usePanelLocale();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const setSession = useAuthStore((s) => s.setSession);
 
   const [step, setStep] = useState<Step>('credentials');
@@ -33,7 +41,8 @@ export function LoginPage() {
   const [totpSecret, setTotpSecret] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<LoginError | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState('');
 
   const credentialsForm = useForm({
     initialValues: { login: '', password: '' },
@@ -43,46 +52,70 @@ export function LoginPage() {
     initialValues: { code: '' },
   });
 
+  async function showEnrollment(response: LoginResponse) {
+    if (!response.pending_token || !response.totp_secret || !response.totp_qr_url) {
+      throw new Error('Incomplete enrollment data');
+    }
+    const dataUrl = await QRCode.toDataURL(response.totp_qr_url, { width: 200, margin: 1 }).catch(() => '');
+    setPendingToken(response.pending_token);
+    setTotpSecret(response.totp_secret);
+    setQrDataUrl(dataUrl);
+    totpForm.reset();
+    setStep('totp_setup');
+  }
+
   const handleCredentialsSubmit = async (values: { login: string; password: string }) => {
     setLoading(true);
-    setError('');
+    setError(null);
 
     try {
       const response = await login(values.login, values.password);
 
       if (response.status === 'totp_setup_required') {
-        setPendingToken(response.pending_token!);
-        setTotpSecret(response.totp_secret!);
-
-        const dataUrl = await QRCode.toDataURL(response.totp_qr_url!, {
-          width: 200,
-          margin: 1,
-        });
-        setQrDataUrl(dataUrl);
-
-        setStep('totp_setup');
+        await showEnrollment(response);
       } else if (response.status === 'totp_required') {
         setPendingToken(response.pending_token!);
         setStep('totp');
       }
+      credentialsForm.setFieldValue('password', '');
     } catch (err) {
-      setError(authErrorMessage(err, 'Неверный логин или пароль'));
+      setError(authErrorMessage(err, 'invalidCredentials'));
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRecovery = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await showEnrollment(await recoverTotp(pendingToken, recoveryCode));
+    } catch (err) {
+      setPendingToken('');
+      setStep('credentials');
+      setError(authErrorMessage(err, 'recoveryRejected'));
+    } finally {
+      setRecoveryCode('');
       setLoading(false);
     }
   };
 
   const handleTotpSubmit = async (values: { code: string }) => {
     setLoading(true);
-    setError('');
+    setError(null);
 
     try {
       const response = await verifyTotp(pendingToken, values.code);
-      setSession(response.session_token, response.operator_id, response.role);
-      notifications.show({ message: 'Вход выполнен', color: 'green' });
-      navigate('/sessions');
+      queryClient.clear();
+      setSession(response.session_token, response.operator_id, response.role, response.password_change_required);
+      if (response.password_change_required) {
+        navigate('/account/password', { replace: true });
+        return;
+      }
+      notifications.show({ message: t('signedIn'), color: 'green' });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
-      setError(authErrorMessage(err, 'Неверный код подтверждения'));
+      setError(authErrorMessage(err, 'invalidTotp'));
     } finally {
       setLoading(false);
     }
@@ -91,12 +124,13 @@ export function LoginPage() {
   return (
     <Paper radius="md" p="xl" withBorder maw={420} mx="auto" mt={100}>
       <Title order={2} ta="center" mb="md">
-         {panelConfig().productName}
+        {productName}
       </Title>
+      <Stack align="flex-end" mb="md"><LanguageSelector /></Stack>
 
       {error && (
         <Alert color="red" mb="md">
-          {error}
+          {t(error.key, error.seconds === undefined ? undefined : { seconds: error.seconds })}
         </Alert>
       )}
 
@@ -104,17 +138,32 @@ export function LoginPage() {
         <form onSubmit={credentialsForm.onSubmit(handleCredentialsSubmit)}>
           <Stack>
             <TextInput
-              label="Логин"
+              label={t('login')}
               required
               {...credentialsForm.getInputProps('login')}
             />
             <PasswordInput
-              label="Пароль"
+              label={t('password')}
+              visibilityToggleButtonProps={{ 'aria-label': t('togglePasswordVisibility') }}
               required
               {...credentialsForm.getInputProps('password')}
             />
             <Button type="submit" loading={loading} fullWidth>
-              Войти
+              {t('signIn')}
+            </Button>
+          </Stack>
+        </form>
+      )}
+
+      {step === 'recovery' && (
+        <form onSubmit={event => { event.preventDefault(); if (!loading) void handleRecovery(); }}>
+          <Stack>
+            <Text size="sm">{t('recoveryInstructions')}</Text>
+            <TextInput label={t('recoveryCode')} required autoComplete="off" maxLength={64} value={recoveryCode}
+              onChange={event => setRecoveryCode(event.currentTarget.value)} />
+            <Button type="submit" loading={loading}>{t('recoverTotp')}</Button>
+            <Button type="button" variant="subtle" disabled={loading} onClick={() => { setRecoveryCode(''); setStep('totp'); }}>
+              {t('backToTotp')}
             </Button>
           </Stack>
         </form>
@@ -123,21 +172,31 @@ export function LoginPage() {
       {step === 'totp_setup' && (
         <Stack>
           <Text size="sm">
-            Отсканируйте QR-код в приложении-аутентификаторе (Google Authenticator, Authy и т.п.)
+            {t('scanQr')}
           </Text>
-          {qrDataUrl && <Image src={qrDataUrl} w={200} h={200} mx="auto" />}
+          {qrDataUrl && <Image src={qrDataUrl} alt={t('qrCode')} w={200} h={200} mx="auto" />}
           <Text size="xs" c="dimmed" ta="center">
-            Или введите секрет вручную: {totpSecret}
+            {t('manualSecret', { secret: totpSecret })}
           </Text>
           <form onSubmit={totpForm.onSubmit(handleTotpSubmit)}>
             <Stack>
               <TextInput
-                label="Код из приложения"
+                label={t('authenticatorCode')}
                 required
                 {...totpForm.getInputProps('code')}
               />
               <Button type="submit" loading={loading} fullWidth>
-                Подтвердить
+                {t('confirm')}
+              </Button>
+              <Button type="button" variant="subtle" disabled={loading} onClick={() => {
+                setStep('credentials');
+                setPendingToken('');
+                setTotpSecret('');
+                setQrDataUrl('');
+                totpForm.reset();
+                setError(null);
+              }}>
+                {t('restartLogin')}
               </Button>
             </Stack>
           </form>
@@ -147,14 +206,17 @@ export function LoginPage() {
       {step === 'totp' && (
         <form onSubmit={totpForm.onSubmit(handleTotpSubmit)}>
           <Stack>
-            <Text size="sm">Введите код из приложения-аутентификатора</Text>
+            <Text size="sm">{t('enterAuthenticatorCode')}</Text>
             <TextInput
-              label="Код"
+              label={t('code')}
               required
               {...totpForm.getInputProps('code')}
             />
             <Button type="submit" loading={loading} fullWidth>
-              Войти
+              {t('signIn')}
+            </Button>
+            <Button type="button" variant="subtle" disabled={loading} onClick={() => { setError(null); setStep('recovery'); }}>
+              {t('useRecoveryCode')}
             </Button>
           </Stack>
         </form>

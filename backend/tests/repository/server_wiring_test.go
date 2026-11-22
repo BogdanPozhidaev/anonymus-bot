@@ -286,8 +286,9 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 			t.Fatal("operator response omitted the new account or temporary password")
 		}
 		op, err := operators.GetByID(ctx, invited.ID)
-		if err != nil || op.Status != "invited" || op.PasswordHash == nil || *op.PasswordHash == invited.TemporaryPassword {
-			t.Fatal("invited operator was not saved with a password hash")
+		if err != nil || op.Status != "invited" || op.PasswordHash == nil ||
+			*op.PasswordHash == invited.TemporaryPassword || !op.MustChangePassword {
+			t.Fatal("invited operator was not saved with a hashed temporary password requiring rotation")
 		}
 		operatorPath := fmt.Sprintf("/api/operators/%d", invited.ID)
 		request(t, http.MethodPatch, operatorPath, `{"name":"Renamed operator"}`, bearer, http.StatusOK)

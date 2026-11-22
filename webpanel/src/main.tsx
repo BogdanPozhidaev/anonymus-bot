@@ -9,7 +9,7 @@ import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 
 import App from './App';
-import { loadPanelConfig, panelConfig } from './panelConfig';
+import { loadPanelConfig } from './panelConfig';
 import { PanelErrorBoundary } from './components/PanelErrorBoundary';
 
 const queryClient = new QueryClient({
@@ -22,19 +22,18 @@ const queryClient = new QueryClient({
 });
 
 void loadPanelConfig().then(() => {
-  document.title = panelConfig().productName;
   ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <MantineProvider>
-      <Notifications />
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <PanelErrorBoundary>
-            <App />
-          </PanelErrorBoundary>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </MantineProvider>
-  </React.StrictMode>
+    <React.StrictMode>
+      <MantineProvider>
+        <Notifications />
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <PanelErrorBoundary>
+              <App />
+            </PanelErrorBoundary>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </MantineProvider>
+    </React.StrictMode>,
   );
 });

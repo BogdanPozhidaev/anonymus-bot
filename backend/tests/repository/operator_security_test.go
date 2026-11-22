@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,8 +50,18 @@ func TestOperatorSessionRevocationAndAuditAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sessionRepo := repository.NewSessionRepository(pool)
+	for _, fixture := range []struct {
+		title string
+		owner int64
+	}{{"Fixture assigned", target.ID}, {"Fixture private", admin.ID}} {
+		session := &models.Session{Title: fixture.title, Status: "active", Language: "ru", OwnerOperatorID: &fixture.owner}
+		if err := sessionRepo.Create(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
 	router := gin.New()
-	api.NewServer(pool, redis, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, repository.NewSessionRepository(pool), nil,
+	api.NewServer(pool, redis, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, sessionRepo, nil,
 		operators, nil, audit, nil, sessions, pending, nil, "", "").RegisterRoutes(router, strings.Repeat("a", 64))
 	call := func(method, path, token, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -75,7 +86,16 @@ func TestOperatorSessionRevocationAndAuditAccess(t *testing.T) {
 	}
 	current := issue(target)
 	call(http.MethodGet, "/api/audit-log", current, "", 403)
-	call(http.MethodGet, "/api/sessions", current, "", 200)
+	call(http.MethodPatch, path, current, `{"role":"admin"}`, 403)
+	adminPath := "/api/operators/" + strconv.FormatInt(admin.ID, 10)
+	call(http.MethodPatch, adminPath, first, `{"role":"operator"}`, 409)
+	call(http.MethodPatch, adminPath, first, `{"status":"suspended"}`, 409)
+	call(http.MethodPatch, adminPath, first, `{"status":"disabled"}`, 409)
+	call(http.MethodGet, "/api/audit-log", first, "", 200)
+	recent := call(http.MethodGet, "/api/sessions?limit=5&offset=0", current, "", 200).Body.String()
+	if !strings.Contains(recent, "Fixture assigned") || strings.Contains(recent, "Fixture private") {
+		t.Fatal("dashboard session list should include only the operator's assignments")
+	}
 	call(http.MethodPatch, path, first, `{"status":"suspended"}`, 200)
 	call(http.MethodGet, "/api/sessions", current, "", 401)
 	call(http.MethodPatch, path, first, `{"status":"active"}`, 200)
@@ -108,5 +128,59 @@ func TestOperatorSessionRevocationAndAuditAccess(t *testing.T) {
 	w := call(http.MethodGet, "/api/audit-log?format=csv&limit=1", first, "", 200)
 	if !strings.Contains(w.Body.String(), "actor_type") || strings.Count(w.Body.String(), "\n") != 2 {
 		t.Fatal("expected bounded CSV with actor type")
+	}
+}
+
+func TestConcurrentProfileChangesKeepAnActiveAdmin(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewOperatorRepository(setupTestDB(t))
+	first := models.Operator{Name: "Fixture A", Login: "fixture-a", Role: "admin", Status: "active", Language: "ru"}
+	second := models.Operator{Name: "Fixture B", Login: "fixture-b", Role: "admin", Status: "active", Language: "ru"}
+	for _, admin := range []*models.Operator{&first, &second} {
+		if err := repo.Create(ctx, admin); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	begin := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-begin
+		role := "operator"
+		results <- repo.UpdateProfile(ctx, first.ID, first.AuthVersion, nil, &role, nil)
+	}()
+	go func() {
+		<-begin
+		status := "suspended"
+		results <- repo.UpdateProfile(ctx, second.ID, second.AuthVersion, nil, nil, &status)
+	}()
+	close(begin)
+
+	accepted, rejected := 0, 0
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			accepted++
+		case errors.Is(err, repository.ErrLastActiveAdmin):
+			rejected++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if accepted != 1 || rejected != 1 {
+		t.Fatalf("accepted %d profile changes and rejected %d", accepted, rejected)
+	}
+	operators, err := repo.ListAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := 0
+	for _, op := range operators {
+		if op.Role == "admin" && op.Status == "active" {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Fatalf("found %d active administrators", active)
 	}
 }

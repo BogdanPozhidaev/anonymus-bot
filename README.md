@@ -12,5 +12,10 @@ Telegram session. Operators manage sessions and view history in a web panel.
 For local verification use Go as declared in each module, Node.js 22 and
 Docker with Compose. Run `go test ./... -race` in `backend` and `bot`.
 In `webpanel` run `npm ci`, then `npm run lint`, `npm run typecheck` and
-`npm run build`. Backend integration tests use temporary Docker
-containers. They do not require the working deployment or a Telegram token.
+`npm run build`. For the panel browser tests, install Chromium once with
+`npx playwright install chromium` and run `npm run test:e2e` from
+`webpanel`. The command builds the panel and serves it on loopback port
+4175. It uses a synthetic API inside the browser.
+
+Backend integration tests use temporary Docker containers. These suites
+do not require the working deployment or a Telegram token.

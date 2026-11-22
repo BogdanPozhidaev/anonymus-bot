@@ -6,7 +6,8 @@ interface AuthState {
   operatorId: number | null;
   role: OperatorRole | null;
   isAuthenticated: boolean;
-  setSession: (token: string, operatorId: number, role: OperatorRole) => void;
+  passwordChangeRequired: boolean;
+  setSession: (token: string, operatorId: number, role: OperatorRole, passwordChangeRequired?: boolean) => void;
   logout: () => void;
 }
 
@@ -15,8 +16,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   operatorId: null,
   role: null,
   isAuthenticated: false,
-  setSession: (token, operatorId, role) =>
-    set({ token, operatorId, role, isAuthenticated: true }),
+  passwordChangeRequired: false,
+  setSession: (token, operatorId, role, passwordChangeRequired = false) =>
+    set({ token, operatorId, role, passwordChangeRequired, isAuthenticated: true }),
   logout: () =>
-    set({ token: null, operatorId: null, role: null, isAuthenticated: false }),
+    set({ token: null, operatorId: null, role: null, passwordChangeRequired: false, isAuthenticated: false }),
 }));

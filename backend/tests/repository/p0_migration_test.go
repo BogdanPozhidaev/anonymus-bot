@@ -40,6 +40,32 @@ func TestAllMigrationsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTemporaryPasswordMigrationPreservesExistingActiveAccounts(t *testing.T) {
+	ctx := context.Background()
+	pool := setupTestDB(t)
+	m, err := migrate.New("file://"+filepath.ToSlash(migrationsPath()), pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = m.Close() })
+	if err := m.Migrate(7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO operators (name,login,role,status) VALUES
+		('fixture','fixture-active','admin','active'), ('fixture','fixture-invited','operator','invited')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Steps(1); err != nil {
+		t.Fatal(err)
+	}
+	for login, want := range map[string]bool{"fixture-active": false, "fixture-invited": true} {
+		var flag bool
+		if err := pool.QueryRow(ctx, "SELECT must_change_password FROM operators WHERE login=$1", login).Scan(&flag); err != nil || flag != want {
+			t.Fatalf("unexpected requirement for %s: %v, %v", login, flag, err)
+		}
+	}
+}
+
 func TestP0MigrationUpgradesExistingData(t *testing.T) {
 	ctx := context.Background()
 	pool := setupTestDB(t)

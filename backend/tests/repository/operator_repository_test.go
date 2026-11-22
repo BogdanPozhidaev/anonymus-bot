@@ -75,7 +75,7 @@ func TestOperatorRepository_GetByID_NotFound(t *testing.T) {
 	}
 }
 
-func TestOperatorRepository_Update(t *testing.T) {
+func TestOperatorRepository_UpdateProfile(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := repository.NewOperatorRepository(pool)
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func TestOperatorRepository_Update(t *testing.T) {
 	operator.Status = models.OperatorStatusActive
 	operator.Name = "Carol Updated"
 
-	if err := repo.Update(ctx, operator); err != nil {
+	if err := repo.UpdateProfile(ctx, operator.ID, operator.AuthVersion, &operator.Name, nil, &operator.Status); err != nil {
 		t.Fatalf("failed to update operator: %v", err)
 	}
 

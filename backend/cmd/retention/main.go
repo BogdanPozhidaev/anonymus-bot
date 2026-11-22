@@ -102,6 +102,13 @@ func main() {
 	} else {
 		logger.Info("incoming request retention complete", "records", requestCount, "dry_run", *dryRun)
 	}
+	linkCount, err := repository.NewOperatorRepository(pool).PurgeExpiredTelegramLinks(ctx, *dryRun)
+	if err != nil {
+		totalErrors++
+		logger.Error("expired Telegram link cleanup failed")
+	} else {
+		logger.Info("expired Telegram link cleanup complete", "records", linkCount, "dry_run", *dryRun)
+	}
 	if totalErrors > 0 {
 		logger.Warn("retention run completed with errors", "total_errors", totalErrors)
 		os.Exit(1)

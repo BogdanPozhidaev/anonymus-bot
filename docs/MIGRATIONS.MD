@@ -9,7 +9,7 @@ docker compose -f infra/docker-compose.yml run --rm -T migrate migrate status
 ```
 
 The one-shot migration service must succeed before Compose starts the backend.
-The current schema reports `version=7 dirty=false`. Status only reads the
+The current schema reports `version=10 dirty=false`. Status only reads the
 database. An explicit upgrade uses the same service:
 
 ```powershell
@@ -24,6 +24,19 @@ Migration 000007 adds the delivery outbox. Upgrade backend and bot together
 after applying it. Avoid mixing older bots that send directly with a backend
 that delivers via the outbox. Existing messages are kept and classified as
 unverified history. They are not enqueued for automatic replay.
+
+Migration 000008 records whether an operator must change their password.
+Existing invited accounts are marked for a change. Existing active
+accounts keep their current sign-in flow. Apply the migration before
+updating the backend and panel together.
+
+Migration 000009 adds operator recovery-code digests. Existing operators
+can issue their own codes after sign-in using their password and TOTP.
+
+Migration 000010 adds short-lived operator linking challenges. Existing
+Telegram bindings remain in place on upgrade or rollback. Apply the
+migration before updating the backend, bot and panel together. Retention
+purges expired challenges, with a count-only preview in dry-run mode.
 
 For the local Vite panel, include both `-f infra/docker-compose.yml` and
 `-f infra/docker-compose.dev.yml` to publish backend to loopback.
