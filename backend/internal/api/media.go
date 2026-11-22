@@ -10,10 +10,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 )
 
-// handleGetMessageMedia отдаёт файл (фото/голос), привязанный к сообщению,
-// после проверки, что текущий оператор имеет право видеть эту сессию.
-// Файл никогда не отдаётся напрямую по URL с чужим доступом — доступ
-// проверяется на уровне сессии, к которой относится сообщение.
+// handleGetMessageMedia serves a message's media after checking access to its session.
 func (s *Server) handleGetMessageMedia(c *gin.Context) {
 	messageID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/config"
-	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 	"github.com/fastcheck/anonymus_bot/backend/internal/retention"
@@ -29,14 +28,14 @@ func main() {
 		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	photosDir, voiceDir, encryptionKey, err := config.MediaSettings()
+	photosDir, voiceDir, err := config.MediaSettings()
 	if err != nil {
 		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	encryptor, err := crypto.NewEncryptor(encryptionKey)
+	encryption, err := config.LoadEncryption()
 	if err != nil {
-		logger.Error("failed to create encryptor", "error", err)
+		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
 
@@ -47,12 +46,12 @@ func main() {
 	}
 	defer pool.Close()
 
-	userRepo := repository.NewUserRepository(pool, encryptor)
+	userRepo := repository.NewUserRepository(pool, encryption.PII)
 	sessionRepo := repository.NewSessionRepository(pool)
 	messageRepo := repository.NewMessageRepository(pool)
 	auditLogRepo := repository.NewAuditLogRepository(pool)
 
-	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	auditHasher := retention.NewAuditLogHasher(encryption.AuditKey)
 	config, err := retention.LoadConfig()
 	if err != nil {
 		logger.Error("failed to load retention config", "error", err)

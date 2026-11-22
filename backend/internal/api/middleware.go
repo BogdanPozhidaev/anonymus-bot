@@ -60,9 +60,8 @@ const (
 	contextKeyAuthVersion = "operator_auth_version"
 )
 
-// requireAuth проверяет наличие валидной сессии оператора в заголовке
-// Authorization: Bearer <token>. При успехе кладёт operator_id и role
-// в контекст запроса для последующего использования хендлерами.
+// requireAuth validates the bearer session and adds the current operator identity,
+// role and authentication version to the request context.
 func (s *Server) requireAuth(allowPasswordChange bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractSessionToken(c)
@@ -94,8 +93,7 @@ func (s *Server) requireAuth(allowPasswordChange bool) gin.HandlerFunc {
 	}
 }
 
-// requireAdmin — дополнительная проверка после requireAuth, ограничивает
-// доступ только для роли admin.
+// requireAdmin restricts an authenticated route to administrators.
 func (s *Server) requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get(contextKeyRole)

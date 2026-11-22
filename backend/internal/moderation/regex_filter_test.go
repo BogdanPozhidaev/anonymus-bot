@@ -62,7 +62,7 @@ func TestContainsContactInfo_CleanText(t *testing.T) {
 		"Здравствуйте, когда будет готов заказ?",
 		"Спасибо большое за помощь!",
 		"Хорошо, договорились",
-		"Стоимость услуги 5000 рублей", // короткое число, не должно попасть под 6-12 цифр
+		"Стоимость услуги 5000 рублей", // The number is too short to match the 6–12 digit pattern.
 	}
 
 	for _, text := range cases {

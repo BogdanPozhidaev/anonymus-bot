@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
+	"github.com/fastcheck/anonymus_bot/bot/internal/config"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -42,7 +43,7 @@ func TestStartRedeemsInvitationInPrivateChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewStartHandler(bot, backendclient.New(backend.URL, serviceToken), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler := NewStartHandler(bot, backendclient.New(backend.URL, serviceToken), slog.New(slog.NewTextHandler(io.Discard, nil)), config.StartBranding{})
 	message := &tgbotapi.Message{Chat: &tgbotapi.Chat{ID: 1, Type: "private"}, From: &tgbotapi.User{ID: 1}}
 	handler.handleWithPayload(context.Background(), message, "42-c")
 	if binds.Load() != 0 || sends.Load() != 1 {
@@ -52,4 +53,42 @@ func TestStartRedeemsInvitationInPrivateChat(t *testing.T) {
 	if binds.Load() != 1 || sends.Load() != 2 {
 		t.Fatal("expected one redemption and one additional message")
 	}
+}
+
+func TestStartBrandingOnJoinAndIncomingRequest(t *testing.T) {
+	fixture := newHandlerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/sessions/bind":
+			_, _ = fmt.Fprint(w, `{"session_id":1,"role":"client"}`)
+		case "/internal/incoming-requests":
+			_, _ = fmt.Fprint(w, `{"id":1}`)
+		default:
+			t.Error("unexpected backend request")
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	ctx := t.Context()
+	start := NewStartHandler(fixture.bot, fixture.backend, fixture.logger, config.StartBranding{
+		OrganizationName:  "North & Co",
+		JoinedRU:          "Добро пожаловать в тестовый диалог",
+		RequestReceivedEN: "We received your fixture request.",
+	})
+	message, _ := testUpdate()
+	message.From.LanguageCode = "ru"
+	start.handleWithPayload(ctx, message, strings.Repeat("A", 43))
+	fixture.expect(t, "Добро пожаловать в тестовый диалог")
+	start.handleWithoutPayload(ctx, message)
+	fixture.expect(t, "«North & Co»")
+	message.From.LanguageCode = "en"
+	start.handleWithPayload(ctx, message, strings.Repeat("A", 43))
+	fixture.expect(t, "You have joined a session with North & Co.")
+	start.handleWithoutPayload(ctx, message)
+	fixture.expect(t, "We received your fixture request.")
+
+	defaultStart := NewStartHandler(fixture.bot, fixture.backend, fixture.logger, config.StartBranding{})
+	defaultStart.handleWithPayload(ctx, message, strings.Repeat("A", 43))
+	fixture.expect(t, "You have joined the session.")
+	message.From.LanguageCode = "ru"
+	defaultStart.handleWithoutPayload(ctx, message)
+	fixture.expect(t, "«Посредник»")
 }

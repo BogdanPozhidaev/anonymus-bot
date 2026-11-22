@@ -9,7 +9,7 @@ import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 
 import App from './App';
-import { loadPanelConfig } from './panelConfig';
+import { loadPanelConfig, panelConfig } from './panelConfig';
 import { PanelErrorBoundary } from './components/PanelErrorBoundary';
 
 const queryClient = new QueryClient({
@@ -22,9 +22,10 @@ const queryClient = new QueryClient({
 });
 
 void loadPanelConfig().then(() => {
+  const { primaryColor, colorScheme } = panelConfig();
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <MantineProvider>
+      <MantineProvider theme={{ primaryColor }} defaultColorScheme={colorScheme}>
         <Notifications />
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>

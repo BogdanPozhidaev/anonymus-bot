@@ -57,7 +57,7 @@ func TestSwitchActiveSessionTx_NotParticipant(t *testing.T) {
 		t.Fatalf("failed to create other user: %v", err)
 	}
 
-	// Сессия принадлежит otherUser, не user — попытка переключения должна быть отклонена.
+	// A user cannot select a session in which they do not participate.
 	session := &models.Session{Title: "Not Mine", Status: models.SessionStatusActive, Language: "ru", ClientUserID: &otherUser.ID}
 	if err := sessionRepo.Create(ctx, session); err != nil {
 		t.Fatalf("failed to create session: %v", err)

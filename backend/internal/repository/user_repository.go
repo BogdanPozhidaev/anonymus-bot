@@ -192,11 +192,8 @@ func (r *UserRepository) SetActiveSession(ctx context.Context, userID, sessionID
 	return nil
 }
 
-// SwitchActiveSessionTx атомарно переключает активную сессию пользователя,
-// проверяя внутри транзакции, что пользователь реально является участником
-// целевой сессии (client_user_id или executor_user_id). Блокировка на строке
-// users предотвращает гонку, если несколько апдейтов от одного telegram_id
-// обрабатываются параллельно (см. риск-зону "переключение сессий").
+// SwitchActiveSessionTx verifies membership before updating the active session.
+// It locks the user row to serialize concurrent changes for that participant.
 func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targetSessionID int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -206,8 +203,7 @@ func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targ
 		_ = tx.Rollback(ctx)
 	}()
 
-	// Блокируем строку пользователя на время операции — это сериализует
-	// конкурентные попытки изменить active_session_id для одного и того же userID.
+	// Lock the user row through the membership check and update.
 	var currentSessionID *int64
 	err = tx.QueryRow(ctx, `SELECT active_session_id FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&currentSessionID)
 	if err != nil {
@@ -241,18 +237,13 @@ func (r *UserRepository) SwitchActiveSessionTx(ctx context.Context, userID, targ
 	return nil
 }
 
-// AnonymizeUser необратимо стирает PII пользователя: username и first_name
-// обнуляются, telegram_id заменяется на гарантированно нерабочее отрицательное
-// значение (сохраняя NOT NULL/UNIQUE constraint, но делая невозможным сопоставление
-// с реальным Telegram-аккаунтом). Используется только retention-процессом.
-func (r *UserRepository) AnonymizeUser(ctx context.Context, userID int64, threshold time.Time) (bool, error) {
-	// Отрицательный telegram_id, гарантированно уникальный и невалидный
-	// (реальные Telegram ID всегда положительны), формируется из ID записи
-	// с обратным знаком минус большая константа — исключает коллизии между
-	// анонимизированными пользователями.
+// AnonymizeUser clears participant attributes and replaces the Telegram ID
+// when the user meets the retention criteria.
+func (r *UserRepository) AnonymizeUser(ctx context.Context, userID int64, threshold time.Time, hashAudit func(context.Context, pgx.Tx, int64) error) (bool, error) {
+	// Derive a unique negative placeholder from the database user ID.
 	anonymizedTelegramID := -(userID + 1_000_000_000_000)
 
-	return r.anonymizeEligibleUser(ctx, userID, anonymizedTelegramID, threshold)
+	return r.anonymizeEligibleUser(ctx, userID, anonymizedTelegramID, threshold, hashAudit)
 }
 
 const anonymizationEligibility = `
@@ -274,7 +265,7 @@ func (r *UserRepository) CanAnonymizeUser(ctx context.Context, userID int64, thr
 	return eligible, err
 }
 
-func (r *UserRepository) anonymizeEligibleUser(ctx context.Context, userID, telegramID int64, threshold time.Time) (bool, error) {
+func (r *UserRepository) anonymizeEligibleUser(ctx context.Context, userID, telegramID int64, threshold time.Time, hashAudit func(context.Context, pgx.Tx, int64) error) (bool, error) {
 	var changed bool
 	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
 		// Keep session membership and status stable while eligibility is evaluated.
@@ -284,7 +275,10 @@ func (r *UserRepository) anonymizeEligibleUser(ctx context.Context, userID, tele
 		result, err := tx.Exec(ctx, `UPDATE users SET username = NULL, first_name = NULL, telegram_id = $3
 			WHERE id = $1 AND `+anonymizationEligibility, userID, threshold, telegramID)
 		changed = result.RowsAffected() == 1
-		return err
+		if err != nil || !changed {
+			return err
+		}
+		return hashAudit(ctx, tx, userID)
 	})
 	return changed && err == nil, err
 }

@@ -165,27 +165,27 @@ host: localhost:8080
 info:
   contact:
     name: API Support
-  description: API для веб-панели и внутреннего общения bot↔backend
+  description: API for the operator panel and internal bot-to-backend communication
   title: Anonymus Bot Backend API
   version: "1.0"
 paths:
   /api/audit-log:
     get:
-      description: Поддерживает фильтры и экспорт в CSV через ?format=csv
+      description: Supports filtering and CSV export via ?format=csv
       parameters:
-      - description: ID актора
+      - description: Actor ID
         in: query
         name: actor_id
         type: integer
-      - description: Тип действия
+      - description: Action type
         in: query
         name: action
         type: string
-      - description: Тип цели
+      - description: Target type
         in: query
         name: target_type
         type: string
-      - description: json или csv
+      - description: json or csv
         in: query
         name: format
         type: string
@@ -199,16 +199,16 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: Список записей аудита
+      summary: List audit events
       tags:
       - audit
   /api/auth/login:
     post:
       consumes:
       - application/json
-      description: Первый шаг аутентификации — проверка логина/пароля
+      description: The first authentication step verifies the username and password
       parameters:
-      - description: Логин и пароль
+      - description: Username and password
         in: body
         name: request
         required: true
@@ -227,7 +227,7 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Логин оператора
+      summary: Sign in as an operator
       tags:
       - auth
   /api/auth/password:
@@ -351,9 +351,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Второй шаг аутентификации — выдаёт session_token при успехе
+      description: Successful verification returns a session token for an enrolled
+        operator
       parameters:
-      - description: Pending token и код
+      - description: Pending token and TOTP code
         in: body
         name: request
         required: true
@@ -372,7 +373,7 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Подтверждение TOTP-кода
+      summary: Verify a TOTP code
       tags:
       - auth
   /api/health:
@@ -431,7 +432,7 @@ paths:
       - incoming-requests
   /api/operators:
     get:
-      description: Доступно только администраторам
+      description: Available to administrators only
       parameters:
       - description: Page size (1–200, default 50)
         in: query
@@ -457,7 +458,7 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: Список операторов
+      summary: List operators
       tags:
       - operators
   /api/operators/{id}/password/reset:
@@ -506,7 +507,7 @@ paths:
       - operators
   /api/sessions:
     get:
-      description: Admin видит все сессии, operator — только свои
+      description: Administrators see all sessions, operators see sessions they own
       parameters:
       - description: Page size (1–200, default 50)
         in: query
@@ -540,14 +541,14 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: Список сессий
+      summary: List sessions
       tags:
       - sessions
     post:
       consumes:
       - application/json
       parameters:
-      - description: Данные сессии
+      - description: Session details
         in: body
         name: request
         required: true
@@ -562,13 +563,13 @@ paths:
             $ref: '#/definitions/models.Session'
       security:
       - BearerAuth: []
-      summary: Создать сессию
+      summary: Create a session
       tags:
       - sessions
   /api/sessions/{id}:
     get:
       parameters:
-      - description: ID сессии
+      - description: Session ID
         in: path
         name: id
         required: true
@@ -594,7 +595,7 @@ paths:
             type: object
       security:
       - BearerAuth: []
-      summary: Получить сессию по ID
+      summary: Get a session by ID
       tags:
       - sessions
   /api/sessions/{id}/messages:
@@ -727,9 +728,82 @@ paths:
       summary: Update session status
       tags:
       - sessions
+  /api/sessions/{id}/transcript:
+    get:
+      description: Owner and administrator access. The export includes message text
+        and media captions without attachment files.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Export format
+        enum:
+        - csv
+        - pdf
+        in: query
+        name: format
+        required: true
+        type: string
+      produces:
+      - text/csv
+      - application/pdf
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Download a session transcript
+      tags:
+      - sessions
 securityDefinitions:
   BearerAuth:
-    description: Введите "Bearer <ваш_session_token>"
+    description: Enter "Bearer <session_token>"
     in: header
     name: Authorization
     type: apiKey

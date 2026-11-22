@@ -12,8 +12,9 @@ Backend предоставляет два семейства эндпоинто�
 Базовый Compose не публикует порт бэкенда. Nginx не проксирует
 `/api/internal` и его подмаршруты. Dev override публикует порт бэкенда
 только на `127.0.0.1:8080`. Для Swagger и k6 используйте локальное тестовое
-окружение. k6 читает токен из `INTERNAL_API_TOKEN_FILE`, а `BASE_URL`
-по умолчанию указывает на `http://localhost:8080`.
+окружение. Для k6 укажите loopback-адрес явно через `BASE_URL` и путь к
+тестовому токену через `INTERNAL_API_TOKEN_FILE`. Изолированный запуск описан
+в [Operations](OPERATIONS.md#isolated-k6-relay-check).
 
 ## Аутентификация
 
@@ -121,6 +122,30 @@ work for 90 seconds and a completed entry is not sent again. If Telegram
 accepts a send and its response is lost, or the database cannot record
 that success, a later retry may send a duplicate. Telegram does not offer
 an idempotency key for these send calls.
+
+## Session transcript download
+
+`GET /api/sessions/:id/transcript?format=csv` or `?format=pdf` downloads
+the retained history in chronological order using the same session access
+rules as the panel. It requires the operator Bearer token. The assigned
+operator and administrators can download from the session detail screen.
+The export includes the UTC timestamp, sender role, content type, delivery
+status, operator send-as attribution, message text and media captions.
+It omits attachment files, file references, participant identifiers and
+session titles. Text written in the conversation is included in the export.
+
+CSV uses UTF-8 with a BOM and prefixes spreadsheet formula-like text with
+an apostrophe. PDF embeds a font with Cyrillic support and displays
+unsupported characters using `[U+XXXX]` notation. Use CSV when the original
+Unicode text is needed.
+
+Downloads are attachments with `Cache-Control: no-store`. Each successful
+export requires a `session_transcript_exported` audit record with operator,
+session, format and message count. If the audit write fails, the endpoint
+returns HTTP 503. The limit is 2,000 messages and 1 MiB of source text per
+export, plus 250 pages for PDF. Oversized exports return HTTP 422 without
+a partial file. If all four exporter slots are in use, the endpoint
+returns HTTP 503.
 
 ## Request limits and paging
 

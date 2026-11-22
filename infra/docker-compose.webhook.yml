@@ -1,0 +1,24 @@
+services:
+  bot:
+    environment:
+      BOT_UPDATE_MODE: webhook
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:?Set TELEGRAM_WEBHOOK_URL to the public HTTPS webhook URL}
+      TELEGRAM_WEBHOOK_SECRET_FILE: /run/secrets/telegram_webhook_secret
+    secrets:
+      - telegram_webhook_secret
+    networks:
+      - webhook
+
+  nginx:
+    volumes:
+      - ./nginx/webhook.conf:/etc/nginx/anonymus-webhook/endpoint.conf:ro
+    networks:
+      webhook: {}
+
+networks:
+  webhook:
+    driver: bridge
+
+secrets:
+  telegram_webhook_secret:
+    file: ${TELEGRAM_WEBHOOK_SECRET_FILE:?Set TELEGRAM_WEBHOOK_SECRET_FILE to a separate secret file}

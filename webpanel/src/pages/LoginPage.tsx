@@ -1,16 +1,16 @@
 import { usePanelLocale } from '../i18n/panelLocale';
 import type { MessageKey } from '../i18n/messages';
 import { LanguageSelector } from '../components/LanguageSelector';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TextInput, PasswordInput, Button, Paper, Title, Stack, Text, Image, Alert } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import QRCode from 'qrcode';
 import { isAxiosError } from 'axios';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { login, recoverTotp, verifyTotp } from '../api/auth';
+import { completeOIDC, login, oidcEnabled, recoverTotp, startOIDC, verifyTotp } from '../api/auth';
 import type { LoginResponse } from '../types/api';
 import { useAuthStore } from '../stores/authStore';
 
@@ -31,18 +31,45 @@ function authErrorMessage(error: unknown, fallback: MessageKey): LoginError {
 }
 
 export function LoginPage() {
-  const { t, productName } = usePanelLocale();
+  const { t, productName, loginSubtitle } = usePanelLocale();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const setSession = useAuthStore((s) => s.setSession);
+  const [oidcCallback] = useState(() => new URLSearchParams(window.location.search).get('oidc'));
+  const callbackHandled = useRef(false);
+  const { data: allowOIDC } = useQuery({ queryKey: ['oidc-enabled'], queryFn: oidcEnabled });
 
   const [step, setStep] = useState<Step>('credentials');
   const [pendingToken, setPendingToken] = useState('');
   const [totpSecret, setTotpSecret] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<LoginError | null>(null);
+  const [loading, setLoading] = useState(oidcCallback === 'complete');
+  const [error, setError] = useState<LoginError | null>(oidcCallback === 'failed' ? { key: 'oidcFailed' } : null);
   const [recoveryCode, setRecoveryCode] = useState('');
+
+  useEffect(() => {
+    if (!oidcCallback || callbackHandled.current) return;
+    callbackHandled.current = true;
+    navigate('/login', { replace: true });
+    if (oidcCallback === 'complete') {
+      void completeOIDC().then(response => {
+        if (response.status !== 'totp_required' || !response.pending_token) throw new Error('Incomplete sign-in');
+        setPendingToken(response.pending_token);
+        setStep('totp');
+      }).catch(error => setError(authErrorMessage(error, 'oidcFailed'))).finally(() => setLoading(false));
+    }
+  }, [navigate, oidcCallback]);
+
+  async function startSingleSignOn() {
+    setLoading(true);
+    setError(null);
+    try {
+      window.location.assign(await startOIDC());
+    } catch (err) {
+      setError(authErrorMessage(err, 'oidcFailed'));
+      setLoading(false);
+    }
+  }
 
   const credentialsForm = useForm({
     initialValues: { login: '', password: '' },
@@ -126,6 +153,7 @@ export function LoginPage() {
       <Title order={2} ta="center" mb="md">
         {productName}
       </Title>
+      {loginSubtitle && <Text ta="center" mb="md" style={{ whiteSpace: 'pre-wrap' }}>{loginSubtitle}</Text>}
       <Stack align="flex-end" mb="md"><LanguageSelector /></Stack>
 
       {error && (
@@ -153,6 +181,12 @@ export function LoginPage() {
             </Button>
           </Stack>
         </form>
+      )}
+
+      {step === 'credentials' && allowOIDC && (
+        <Button variant="default" fullWidth mt="sm" disabled={loading} onClick={() => void startSingleSignOn()}>
+          {t('oidcSignIn')}
+        </Button>
       )}
 
       {step === 'recovery' && (

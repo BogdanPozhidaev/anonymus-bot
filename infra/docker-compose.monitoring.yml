@@ -1,0 +1,99 @@
+services:
+  backend:
+    environment:
+      METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    secrets:
+      - metrics_token
+    networks:
+      - monitoring
+
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=512MB
+    secrets:
+      - metrics_token
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=32m,mode=1777,nosuid,nodev,noexec
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if ! grep -q '[^[:space:]]' /run/secrets/grafana_admin_password; then
+          echo 'Grafana requires a readable, nonempty admin password file' >&2
+          exit 1
+        fi
+        exec /run.sh
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+networks:
+  monitoring:
+    driver: bridge
+
+secrets:
+  metrics_token:
+    file: ${METRICS_TOKEN_FILE:?Set METRICS_TOKEN_FILE to a dedicated secret file}
+  grafana_admin_password:
+    file: ${GRAFANA_ADMIN_PASSWORD_FILE:?Set GRAFANA_ADMIN_PASSWORD_FILE to a separate secret file}
+
+volumes:
+  prometheus_data:
+  grafana_data:

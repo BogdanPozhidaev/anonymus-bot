@@ -24,36 +24,36 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Поддерживает фильтры и экспорт в CSV через ?format=csv",
+                "description": "Supports filtering and CSV export via ?format=csv",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "audit"
                 ],
-                "summary": "Список записей аудита",
+                "summary": "List audit events",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "ID актора",
+                        "description": "Actor ID",
                         "name": "actor_id",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Тип действия",
+                        "description": "Action type",
                         "name": "action",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Тип цели",
+                        "description": "Target type",
                         "name": "target_type",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "json или csv",
+                        "description": "json or csv",
                         "name": "format",
                         "in": "query"
                     }
@@ -71,7 +71,7 @@ const docTemplate = `{
         },
         "/api/auth/login": {
             "post": {
-                "description": "Первый шаг аутентификации — проверка логина/пароля",
+                "description": "The first authentication step verifies the username and password",
                 "consumes": [
                     "application/json"
                 ],
@@ -81,10 +81,10 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Логин оператора",
+                "summary": "Sign in as an operator",
                 "parameters": [
                     {
-                        "description": "Логин и пароль",
+                        "description": "Username and password",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -298,7 +298,7 @@ const docTemplate = `{
         },
         "/api/auth/totp/verify": {
             "post": {
-                "description": "Второй шаг аутентификации — выдаёт session_token при успехе",
+                "description": "Successful verification returns a session token for an enrolled operator",
                 "consumes": [
                     "application/json"
                 ],
@@ -308,10 +308,10 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Подтверждение TOTP-кода",
+                "summary": "Verify a TOTP code",
                 "parameters": [
                     {
-                        "description": "Pending token и код",
+                        "description": "Pending token and TOTP code",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -431,14 +431,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Доступно только администраторам",
+                "description": "Available to administrators only",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "operators"
                 ],
-                "summary": "Список операторов",
+                "summary": "List operators",
                 "parameters": [
                     {
                         "type": "integer",
@@ -549,14 +549,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Admin видит все сессии, operator — только свои",
+                "description": "Administrators see all sessions, operators see sessions they own",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "sessions"
                 ],
-                "summary": "Список сессий",
+                "summary": "List sessions",
                 "parameters": [
                     {
                         "type": "integer",
@@ -617,10 +617,10 @@ const docTemplate = `{
                 "tags": [
                     "sessions"
                 ],
-                "summary": "Создать сессию",
+                "summary": "Create a session",
                 "parameters": [
                     {
-                        "description": "Данные сессии",
+                        "description": "Session details",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -652,11 +652,11 @@ const docTemplate = `{
                 "tags": [
                     "sessions"
                 ],
-                "summary": "Получить сессию по ID",
+                "summary": "Get a session by ID",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "ID сессии",
+                        "description": "Session ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -883,6 +883,115 @@ const docTemplate = `{
                     },
                     "413": {
                         "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/sessions/{id}/transcript": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Owner and administrator access. The export includes message text and media captions without attachment files.",
+                "produces": [
+                    "text/csv",
+                    "application/pdf"
+                ],
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Download a session transcript",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Session ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "csv",
+                            "pdf"
+                        ],
+                        "type": "string",
+                        "description": "Export format",
+                        "name": "format",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1139,7 +1248,7 @@ const docTemplate = `{
     },
     "securityDefinitions": {
         "BearerAuth": {
-            "description": "Введите \"Bearer \u003cваш_session_token\u003e\"",
+            "description": "Enter \"Bearer \u003csession_token\u003e\"",
             "type": "apiKey",
             "name": "Authorization",
             "in": "header"
@@ -1154,7 +1263,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Anonymus Bot Backend API",
-	Description:      "API для веб-панели и внутреннего общения bot↔backend",
+	Description:      "API for the operator panel and internal bot-to-backend communication",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

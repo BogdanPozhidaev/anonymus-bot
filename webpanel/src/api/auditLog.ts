@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { saveDownload } from './download';
 import type { AuditLogEntry } from '../types/api';
 
 export interface AuditLogFilters {
@@ -19,17 +20,10 @@ export async function listAuditLog(filters: AuditLogFilters = {}): Promise<{ ent
 }
 
 export async function downloadAuditLogCsv(filters: AuditLogFilters = {}): Promise<void> {
-  const response = await apiClient.get('/audit-log', {
+  const response = await apiClient.get<Blob>('/audit-log', {
     params: { ...filters, format: 'csv' },
     responseType: 'blob',
   });
 
-  const url = window.URL.createObjectURL(new Blob([response.data]));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'audit_log.csv';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
+  saveDownload(response.data, 'audit_log.csv');
 }

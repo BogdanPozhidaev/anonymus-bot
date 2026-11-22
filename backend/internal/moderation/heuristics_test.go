@@ -13,7 +13,7 @@ func TestContainsSuspiciousPhrase_Detected(t *testing.T) {
 		"вот мой номер, звони",
 		"скинь контакт пожалуйста",
 		"давай напрямую договоримся",
-		"ДАВАЙ НАПРЯМУЮ", // проверка регистронезависимости
+		"ДАВАЙ НАПРЯМУЮ", // Check case-insensitive matching.
 	}
 
 	for _, text := range cases {

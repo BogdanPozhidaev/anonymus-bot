@@ -31,8 +31,7 @@ func ageSessionClosedAt(t *testing.T, pool *pgxpool.Pool, sessionID int64, age t
 func migrationsPath() string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(currentFile)
-	// currentFile лежит где-то внутри backend/, поднимаемся до корня проекта
-	// корень проекта = папка, где лежит migrations/, на два уровня выше backend/
+	// Resolve the migration directory from the source file's location.
 	projectRoot := filepath.Join(dir, "..", "..", "..")
 	return filepath.Join(projectRoot, "migrations")
 }

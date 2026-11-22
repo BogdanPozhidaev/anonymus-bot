@@ -1,4 +1,4 @@
-# Секреты
+# Secrets
 .env
 *.env
 !.env.example
@@ -8,6 +8,8 @@ bin/
 *.exe
 *.test
 *.out
+/backend/coverage
+/bot/coverage
 vendor/
 
 # Node 
@@ -24,5 +26,5 @@ build/
 .DS_Store
 Thumbs.db
 
-# Логи
+# Logs
 *.log

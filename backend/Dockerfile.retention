@@ -13,7 +13,7 @@ FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /retention /retention
-COPY cmd/retention/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chmod=755 cmd/retention/entrypoint.sh /entrypoint.sh
 
+USER 10001:10001
 ENTRYPOINT ["/entrypoint.sh"]

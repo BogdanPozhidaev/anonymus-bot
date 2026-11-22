@@ -2,6 +2,8 @@ package repository_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -121,7 +123,8 @@ func TestTOTPEnrollmentRequiresConfirmationAndEncryptsSecret(t *testing.T) {
 	}
 	call(http.MethodGet, "/api/sessions", limited.Token, nil, http.StatusUnauthorized)
 	call(http.MethodGet, "/api/operators", limited.Token, nil, http.StatusUnauthorized)
-	if ttl := client.TTL(ctx, "password_change_session:"+limited.Token).Val(); ttl <= 0 || ttl > 5*time.Minute {
+	limitedDigest := sha256.Sum256([]byte(limited.Token))
+	if ttl := client.TTL(ctx, "password_change_session:sha256:"+hex.EncodeToString(limitedDigest[:])).Val(); ttl <= 0 || ttl > 5*time.Minute {
 		t.Fatalf("unexpected restricted session TTL: %s", ttl)
 	}
 	op := get()

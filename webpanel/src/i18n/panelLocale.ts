@@ -45,5 +45,10 @@ export function usePanelLocale() {
     (placeholder, name) => String(values?.[name] ?? placeholder),
   );
   const locale = language === 'ru' ? 'ru-RU' : 'en-US';
-  return { t, language, locale, productName: panelConfig().productName || t('productName') };
+  const config = panelConfig();
+  return {
+    t, language, locale,
+    productName: config.productName || t('productName'),
+    loginSubtitle: config.loginSubtitle[language],
+  };
 }

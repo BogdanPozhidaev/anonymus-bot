@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type Config struct {
@@ -15,11 +16,26 @@ type Config struct {
 	BackendURL          string
 	InternalAPIToken    string
 	BotInternalToken    string
-	RedisURL            string
 	PhotosDir           string
 	VoiceDir            string
 	OperatorGroupChatID int64
 	PanelBaseURL        string
+	StartBranding       StartBranding
+	UpdateMode          string
+	WebhookURL          string
+	WebhookSecret       string
+}
+
+const (
+	UpdatePolling = "polling"
+	UpdateWebhook = "webhook"
+	WebhookPath   = "/telegram/webhook"
+)
+
+type StartBranding struct {
+	OrganizationName                     string
+	JoinedRU, JoinedEN                   string
+	RequestReceivedRU, RequestReceivedEN string
 }
 
 var telegramTokenFormat = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
@@ -44,7 +60,6 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		BackendURL:       os.Getenv("BACKEND_URL"),
-		RedisURL:         os.Getenv("REDIS_URL"),
 		PhotosDir:        os.Getenv("PHOTOS_DIR"),
 		VoiceDir:         os.Getenv("VOICE_DIR"),
 	}
@@ -63,10 +78,6 @@ func Load() (*Config, error) {
 	cfg.BotInternalToken, err = readInternalAPIToken("BOT_INTERNAL_TOKEN_FILE")
 	if err != nil {
 		return nil, err
-	}
-	redisURL, err := url.Parse(cfg.RedisURL)
-	if err != nil || redisURL.Hostname() == "" || (redisURL.Scheme != "redis" && redisURL.Scheme != "rediss") {
-		return nil, fmt.Errorf("REDIS_URL must be a valid Redis connection URL")
 	}
 	if cfg.PhotosDir == "" {
 		return nil, fmt.Errorf("PHOTOS_DIR is not set")
@@ -91,8 +102,68 @@ func Load() (*Config, error) {
 	}
 	cfg.OperatorGroupChatID = groupChatID
 	cfg.PanelBaseURL = strings.TrimRight(panelBaseStr, "/")
+	cfg.StartBranding, err = loadStartBranding()
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.loadUpdateMode(); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func (c *Config) loadUpdateMode() error {
+	c.UpdateMode = os.Getenv("BOT_UPDATE_MODE")
+	switch c.UpdateMode {
+	case "", UpdatePolling:
+		c.UpdateMode = UpdatePolling
+		return nil
+	case UpdateWebhook:
+	default:
+		return fmt.Errorf("BOT_UPDATE_MODE must be polling or webhook")
+	}
+	c.WebhookURL = os.Getenv("TELEGRAM_WEBHOOK_URL")
+	u, err := url.Parse(c.WebhookURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		u.EscapedPath() != WebhookPath || strings.ContainsAny(c.WebhookURL, "?#") || strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("TELEGRAM_WEBHOOK_URL must be an HTTPS URL ending in %s without credentials, query or fragment", WebhookPath)
+	}
+	switch u.Port() {
+	case "", "443", "80", "88", "8443":
+	default:
+		return fmt.Errorf("TELEGRAM_WEBHOOK_URL must use port 443, 80, 88 or 8443")
+	}
+	c.WebhookSecret, err = readInternalAPIToken("TELEGRAM_WEBHOOK_SECRET_FILE")
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(c.WebhookSecret, c.InternalAPIToken) || strings.EqualFold(c.WebhookSecret, c.BotInternalToken) {
+		return fmt.Errorf("TELEGRAM_WEBHOOK_SECRET_FILE must contain a dedicated webhook secret")
+	}
+	return nil
+}
+
+func loadStartBranding() (StartBranding, error) {
+	var branding StartBranding
+	for _, field := range []struct {
+		name        string
+		destination *string
+		maxBytes    int
+	}{
+		{"BOT_ORGANIZATION_NAME", &branding.OrganizationName, 120},
+		{"BOT_JOINED_TEXT_RU", &branding.JoinedRU, 1000},
+		{"BOT_JOINED_TEXT_EN", &branding.JoinedEN, 1000},
+		{"BOT_REQUEST_RECEIVED_TEXT_RU", &branding.RequestReceivedRU, 1000},
+		{"BOT_REQUEST_RECEIVED_TEXT_EN", &branding.RequestReceivedEN, 1000},
+	} {
+		value := strings.TrimSpace(os.Getenv(field.name))
+		if !utf8.ValidString(value) || len(value) > field.maxBytes {
+			return StartBranding{}, fmt.Errorf("%s must be valid UTF-8 with at most %d bytes", field.name, field.maxBytes)
+		}
+		*field.destination = value
+	}
+	return branding, nil
 }
 
 func validHTTPURL(raw string) bool {

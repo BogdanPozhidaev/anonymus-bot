@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -38,27 +37,24 @@ func validPort(port string) bool {
 	return err == nil && n >= 1 && n <= 65535
 }
 
-func MediaSettings() (photos, voice string, key []byte, err error) {
+func MediaSettings() (photos, voice string, err error) {
 	photos, voice = os.Getenv("PHOTOS_DIR"), os.Getenv("VOICE_DIR")
 	if strings.TrimSpace(photos) == "" {
-		return "", "", nil, fmt.Errorf("PHOTOS_DIR is required")
+		return "", "", fmt.Errorf("PHOTOS_DIR is required")
 	}
 	if strings.TrimSpace(voice) == "" {
-		return "", "", nil, fmt.Errorf("VOICE_DIR is required")
+		return "", "", fmt.Errorf("VOICE_DIR is required")
 	}
-	key, err = base64.StdEncoding.DecodeString(os.Getenv("PII_ENCRYPTION_KEY"))
-	if err != nil || len(key) != 32 {
-		return "", "", nil, fmt.Errorf("PII_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
-	}
-	return photos, voice, key, nil
+	return photos, voice, nil
 }
 
 type API struct {
 	DatabaseURL, PhotosDir, VoiceDir, BotURL, Port, TrustedProxyIP string
-	EncryptionKey                                                  []byte
+	Encryption                                                     Encryption
 	Redis                                                          *redis.Options
 	Swagger                                                        bool
 	Moderation                                                     moderation.Config
+	OIDC                                                           *OIDC
 }
 
 func LoadAPI() (API, error) {
@@ -68,7 +64,11 @@ func LoadAPI() (API, error) {
 	if err != nil {
 		return cfg, err
 	}
-	cfg.PhotosDir, cfg.VoiceDir, cfg.EncryptionKey, err = MediaSettings()
+	cfg.PhotosDir, cfg.VoiceDir, err = MediaSettings()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Encryption, err = LoadEncryption()
 	if err != nil {
 		return cfg, err
 	}
@@ -111,5 +111,6 @@ func LoadAPI() (API, error) {
 	if err != nil {
 		return cfg, err
 	}
-	return cfg, nil
+	cfg.OIDC, err = loadOIDC()
+	return cfg, err
 }

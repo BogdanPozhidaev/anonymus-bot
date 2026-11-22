@@ -14,4 +14,5 @@ RUN apk add --no-cache ca-certificates imagemagick libwebp libjpeg-turbo libpng
 
 COPY --from=builder /bot /bot
 
+USER 10001:10001
 CMD ["/bot"]

@@ -14,7 +14,6 @@ type Message struct {
 	ContentType      string    `db:"content_type" json:"content_type"`
 	Content          *string   `db:"content" json:"content"`
 	FileID           *string   `db:"file_id" json:"file_id"`
-	InternalFilePath *string   `db:"internal_file_path" json:"-"`
 	SentByOperator   bool      `db:"sent_by_operator" json:"sent_by_operator"`
 	ImpersonatedRole *string   `db:"impersonated_role" json:"impersonated_role"`
 	CreatedAt        time.Time `db:"created_at" json:"created_at"`

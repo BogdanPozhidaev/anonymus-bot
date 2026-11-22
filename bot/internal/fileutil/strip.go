@@ -6,11 +6,8 @@ import (
 	"os/exec"
 )
 
-// StripMetadata запускает ImageMagick для удаления всех метаданных
-// (EXIF, IPTC, XMP) из изображения. inputPath и outputPath должны
-// быть разными файлами — ImageMagick корректно работает in-place,
-// но раздельные пути упрощают последующую гарантированную очистку
-// оригинала с метаданными.
+// StripMetadata uses ImageMagick to write an image without metadata.
+// Separate input and output paths let the caller remove the original.
 func StripMetadata(inputPath, outputPath string) error {
 	cmd := exec.Command("convert", inputPath, "-strip", outputPath)
 
@@ -22,8 +19,7 @@ func StripMetadata(inputPath, outputPath string) error {
 	return nil
 }
 
-// RemoveFile удаляет файл с диска, игнорируя ошибку "файл не найден"
-// (файл мог быть уже удалён ранее в цепочке обработки).
+// RemoveFile deletes a path and treats a missing file as already removed.
 func RemoveFile(path string) error {
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {

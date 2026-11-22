@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
+	"github.com/fastcheck/anonymus_bot/backend/internal/service"
 )
 
 type relayMessageRequest struct {
@@ -48,7 +48,7 @@ func (s *Server) handleRelayMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid media file id"})
 		return
 	}
-	resp, err := s.relayMessage(ctx, req)
+	resp, err := s.relay.Submit(ctx, service.RelayInput(req), s.notifySessionStatus, s.sendModerationAlert)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "sender or session not found"})
@@ -58,121 +58,7 @@ func (s *Server) handleRelayMessage(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, resp)
-}
-
-// relayMessage — ядро логики маппинга. Определяет сессию и роль отправителя,
-// проверяет её статус, находит получателя (вторую сторону), сохраняет сообщение.
-func (s *Server) relayMessage(ctx context.Context, req relayMessageRequest) (*relayMessageResponse, error) {
-	sender, err := s.userRepo.GetByTelegramID(ctx, req.SenderTelegramID)
-	if errors.Is(err, repository.ErrNotFound) {
-		return &relayMessageResponse{Blocked: true, BlockReason: "no_active_session"}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if sender.ActiveSessionID == nil {
-		return &relayMessageResponse{
-			Blocked:     true,
-			BlockReason: "no_active_session",
-		}, nil
-	}
-
-	session, err := s.sessionRepo.GetByID(ctx, *sender.ActiveSessionID)
-	if err != nil {
-		return nil, err
-	}
-
-	if session.Status != models.SessionStatusActive {
-		return &relayMessageResponse{
-			Blocked:     true,
-			BlockReason: "session_not_active",
-		}, nil
-	}
-
-	senderRole, recipientUserID, _ := determineRoleAndRecipient(session, sender.ID)
-	if senderRole == "" {
-		return &relayMessageResponse{
-			Blocked:     true,
-			BlockReason: "sender_not_in_session",
-		}, nil
-	}
-
-	// Apply the same checks to media captions and ordinary text.
-	if req.Content != "" {
-		modResult, err := s.moderationService.Check(ctx, session.ID, "user", sender.ID, req.Content)
-		if err != nil {
-			s.logger.Error("moderation check failed", "error", err, "user_id", sender.ID)
-			return &relayMessageResponse{Blocked: true, BlockReason: "moderation_unavailable"}, nil
-		}
-		if modResult.Blocked {
-			s.logger.Warn("message blocked by moderation",
-				"user_id", sender.ID,
-				"session_id", session.ID,
-				"reason", modResult.Reason,
-				"violation_count", modResult.ViolationCount,
-			)
-
-			if modResult.ShouldPause {
-				changed, err := s.sessionRepo.TransitionStatus(ctx, session.ID, models.SessionStatusActive, models.SessionStatusPaused)
-				modResult.ShouldPause = changed
-				if err != nil {
-					s.logger.Error("failed to pause session after violations", "error", err, "session_id", session.ID)
-				} else if changed {
-					s.logger.Warn("session auto-paused due to repeated violations", "session_id", session.ID, "violation_count", modResult.ViolationCount)
-					s.notifySessionStatus(ctx, session, models.SessionStatusPaused)
-				}
-			}
-
-			s.sendModerationAlert(ctx, session, modResult)
-
-			return &relayMessageResponse{
-				Blocked:     true,
-				BlockReason: "moderation_violation",
-			}, nil
-		}
-	}
-
-	message := &models.Message{
-		SessionID:    session.ID,
-		SenderUserID: &sender.ID,
-		SenderRole:   senderRole,
-		ContentType:  req.ContentType,
-	}
-	if req.Content != "" {
-		message.Content = &req.Content
-	}
-	if req.FileID != "" {
-		message.FileID = &req.FileID
-	}
-
-	if err := s.messageRepo.Enqueue(ctx, message); err != nil {
-		return nil, err
-	}
-
-	if recipientUserID == nil {
-		return &relayMessageResponse{
-			Blocked:     true,
-			BlockReason: "counterparty_not_bound_yet",
-			MessageID:   message.ID,
-			SessionID:   session.ID,
-		}, nil
-	}
-
-	return &relayMessageResponse{MessageID: message.ID, SessionID: session.ID}, nil
-}
-
-// determineRoleAndRecipient возвращает роль отправителя, ID пользователя-получателя
-// (вторая сторона сессии) и подпись, с которой сообщение придёт получателю.
-func determineRoleAndRecipient(session *models.Session, senderUserID int64) (role string, recipientUserID *int64, label string) {
-	if session.ClientUserID != nil && *session.ClientUserID == senderUserID {
-		return models.SenderRoleClient, session.ExecutorUserID, "Клиент:"
-	}
-	if session.ExecutorUserID != nil && *session.ExecutorUserID == senderUserID {
-		return models.SenderRoleExecutor, session.ClientUserID, "Менеджер:"
-	}
-	return "", nil, ""
+	c.JSON(http.StatusOK, relayMessageResponse(*resp))
 }
 
 // handleSendMessageAsOperator godoc
@@ -190,9 +76,8 @@ func determineRoleAndRecipient(session *models.Session, senderUserID int64) (rol
 // @Failure      503 {object} map[string]string
 // @Router       /api/sessions/{id}/send-as [post]
 func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
-	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+	sessionID, ok := readSessionID(c)
+	if !ok {
 		return
 	}
 
@@ -226,9 +111,7 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 
 	operatorID, _ := getOperatorID(c)
 
-	// Модерация применяется точно так же, как к обычным сообщениям —
-	// закрывает технический долг из Спринта 4: сообщения оператора
-	// в режиме active не должны обходить фильтры.
+	// Messages sent on behalf of participants use the same moderation checks.
 	modResult, err := s.moderationService.Check(ctx, session.ID, "operator", operatorID, req.Content)
 	if err != nil {
 		s.logger.Error("moderation check failed for operator message", "error", err, "operator_id", operatorID)

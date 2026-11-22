@@ -1,6 +1,21 @@
 import { apiClient } from './client';
 import type { LoginResponse, VerifyTotpResponse } from '../types/api';
 
+export async function oidcEnabled(): Promise<boolean> {
+  const { data } = await apiClient.get<{ enabled: boolean }>('/auth/oidc');
+  return data.enabled === true;
+}
+
+export async function startOIDC(): Promise<string> {
+  const { data } = await apiClient.post<{ authorization_url: string }>('/auth/oidc/start');
+  return data.authorization_url;
+}
+
+export async function completeOIDC(): Promise<LoginResponse> {
+  const { data } = await apiClient.post<LoginResponse>('/auth/oidc/complete');
+  return data;
+}
+
 export async function login(login: string, password: string): Promise<LoginResponse> {
   const response = await apiClient.post<LoginResponse>('/auth/login', { login, password });
   return response.data;

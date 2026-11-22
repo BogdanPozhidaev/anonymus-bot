@@ -6,26 +6,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
+	"github.com/fastcheck/anonymus_bot/backend/internal/service"
 	"github.com/gin-gonic/gin"
 )
-
-const inviteTokenBytes = 32
-
-func inviteTokenHash(token string) ([]byte, bool) {
-	if len(token) != base64.RawURLEncoding.EncodedLen(inviteTokenBytes) {
-		return nil, false
-	}
-	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
-	if err != nil {
-		return nil, false
-	}
-	hash := sha256.Sum256(raw)
-	return hash[:], true
-}
 
 func (s *Server) handleIssueInvite(c *gin.Context) {
 	var req struct {
@@ -35,7 +21,7 @@ func (s *Server) handleIssueInvite(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invitation role"})
 		return
 	}
-	raw := make([]byte, inviteTokenBytes)
+	raw := make([]byte, service.InviteTokenBytes)
 	if _, err := rand.Read(raw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
@@ -54,8 +40,11 @@ func (s *Server) handleRevokeInvite(c *gin.Context) {
 }
 
 func (s *Server) manageInvite(c *gin.Context, role string, hash []byte, token string) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
+	id, ok := readSessionID(c)
+	if !ok {
+		return
+	}
+	if id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
 		return
 	}

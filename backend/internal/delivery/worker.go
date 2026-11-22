@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -11,27 +12,32 @@ import (
 
 const leaseDuration = 90 * time.Second
 const maxAttempts = 5
+const sendTimeout = 45 * time.Second
+const completionTimeout = 10 * time.Second
 
 type sender interface {
 	SendMessage(context.Context, botclient.SendMessageRequest) error
 }
 
 type Worker struct {
-	repo   *repository.MessageRepository
-	bot    sender
-	logger *slog.Logger
+	repo           *repository.MessageRepository
+	bot            sender
+	logger         *slog.Logger
+	observeAttempt func(notice, success bool)
 }
 
-func New(repo *repository.MessageRepository, bot sender, logger *slog.Logger) *Worker {
-	return &Worker{repo: repo, bot: bot, logger: logger}
+func New(repo *repository.MessageRepository, bot sender, logger *slog.Logger, observeAttempt func(notice, success bool)) *Worker {
+	return &Worker{repo: repo, bot: bot, logger: logger, observeAttempt: observeAttempt}
 }
 
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	// A claimed item keeps its own send and completion deadlines during shutdown.
+	attemptCtx := context.WithoutCancel(ctx)
 	for ctx.Err() == nil {
-		processed, err := w.ProcessNext(ctx)
-		if err != nil {
+		processed, err := w.processNext(ctx, attemptCtx)
+		if err != nil && !errors.Is(err, ctx.Err()) {
 			w.logger.Error("delivery outbox operation failed")
 		}
 		if processed && err == nil {
@@ -46,7 +52,11 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
-	item, err := w.repo.ClaimDelivery(ctx, leaseDuration)
+	return w.processNext(ctx, ctx)
+}
+
+func (w *Worker) processNext(claimCtx, attemptCtx context.Context) (bool, error) {
+	item, err := w.repo.ClaimDelivery(claimCtx, leaseDuration)
 	if err != nil || item == nil {
 		return false, err
 	}
@@ -73,9 +83,14 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 			req.Text = "We could not confirm delivery after several attempts. Contact an operator."
 		}
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	sendCtx, cancelSend := context.WithTimeout(attemptCtx, sendTimeout)
 	sendErr := w.bot.SendMessage(sendCtx, req)
-	cancel()
+	cancelSend()
+	if w.observeAttempt != nil {
+		w.observeAttempt(item.Notice, sendErr == nil)
+	}
 	retry := time.Duration(5*(1<<item.Attempts)) * time.Second
-	return true, w.repo.CompleteDelivery(ctx, item, sendErr == nil, retry, maxAttempts)
+	completeCtx, cancelCompletion := context.WithTimeout(attemptCtx, completionTimeout)
+	defer cancelCompletion()
+	return true, w.repo.CompleteDelivery(completeCtx, item, sendErr == nil, retry, maxAttempts)
 }

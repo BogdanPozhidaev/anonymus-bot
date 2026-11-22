@@ -8,11 +8,10 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// HandlerFunc обрабатывает один апдейт. Реализация должна быть безопасна
-// для конкурентного вызова из разных горутин одновременно.
+// HandlerFunc processes one update and must support concurrent calls.
 type HandlerFunc func(ctx context.Context, update tgbotapi.Update)
 
-// Dispatcher распределяет входящие апдейты по ограниченному пулу горутин.
+// Dispatcher limits concurrency and preserves update order for each sender.
 type Dispatcher struct {
 	handler   HandlerFunc
 	logger    *slog.Logger
@@ -28,9 +27,7 @@ func New(handler HandlerFunc, concurrency int, logger *slog.Logger) *Dispatcher 
 	}
 }
 
-// Run читает апдейты из канала до его закрытия, распределяя обработку
-// по пулу горутин. Блокирует вызывающего до тех пор, пока канал updates
-// не будет закрыт и все запущенные обработчики не завершатся.
+// Run consumes updates until the channel closes and waits for active handlers.
 func (d *Dispatcher) Run(ctx context.Context, updates tgbotapi.UpdatesChannel) {
 	var order sync.Mutex
 	tails := make(map[int64]chan struct{})

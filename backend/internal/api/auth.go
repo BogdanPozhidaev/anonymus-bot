@@ -65,12 +65,12 @@ func operatorNeedsTOTPEnrollment(operator *models.Operator) bool {
 }
 
 // handleLogin godoc
-// @Summary      Логин оператора
-// @Description  Первый шаг аутентификации — проверка логина/пароля
+// @Summary      Sign in as an operator
+// @Description  The first authentication step verifies the username and password
 // @Tags         auth
 // @Accept       json
 // @Produce      json
-// @Param        request body loginRequest true "Логин и пароль"
+// @Param        request body loginRequest true "Username and password"
 // @Success      200 {object} loginResponse
 // @Failure      401 {object} map[string]string
 // @Router       /api/auth/login [post]
@@ -93,8 +93,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			auth.VerifyPassword(dummyOperatorPasswordHash, req.Password)
-			// Одинаковый ответ на "нет такого логина" и "неверный пароль" —
-			// не даём подсказки об существовании конкретного аккаунта.
+			// Use the same response for unknown usernames and incorrect passwords.
 			s.writeAuditLog(c, 0, "unknown", "operator_login_failed", "", 0, nil)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
@@ -149,12 +148,12 @@ func (s *Server) handleLogin(c *gin.Context) {
 }
 
 // handleVerifyTOTP godoc
-// @Summary      Подтверждение TOTP-кода
-// @Description  Второй шаг аутентификации — выдаёт session_token при успехе
+// @Summary      Verify a TOTP code
+// @Description  Successful verification returns a session token for an enrolled operator
 // @Tags         auth
 // @Accept       json
 // @Produce      json
-// @Param        request body verifyTOTPRequest true "Pending token и код"
+// @Param        request body verifyTOTPRequest true "Pending token and TOTP code"
 // @Success      200 {object} verifyTOTPResponse
 // @Failure      401 {object} map[string]string
 // @Router       /api/auth/totp/verify [post]

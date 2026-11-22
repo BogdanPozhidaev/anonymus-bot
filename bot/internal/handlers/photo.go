@@ -30,7 +30,7 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 		return
 	}
 
-	// Telegram присылает несколько размеров одного фото — берём наибольший (последний в массиве).
+	// Use the last photo variant supplied by Telegram.
 	largest := message.Photo[len(message.Photo)-1]
 
 	fileID := uuid.New().String()
@@ -45,9 +45,7 @@ func (h *PhotoHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
 
 	stripErr := h.strip(origPath, strippedPath)
 
-	// Оригинал с метаданными удаляется немедленно и безусловно,
-	// вне зависимости от результата — не оставляем файл с EXIF на диске
-	// даже при ошибке обработки.
+	// Try to remove the original even if metadata stripping fails.
 	if err := fileutil.RemoveFile(origPath); err != nil {
 		h.logger.Error("failed to remove original photo", "error", err)
 	}

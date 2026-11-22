@@ -17,9 +17,8 @@ func NewBlockedContentHandler(bot *tgbotapi.BotAPI, logger *slog.Logger) *Blocke
 
 const blockedContentText = "Этот тип сообщений временно не поддерживается. Отправьте текстом, голосовым или фото."
 
-// DetectBlockedType проверяет апдейт на неподдерживаемые типы контента
-// и возвращает название типа для логирования, либо пустую строку, если
-// сообщение не подпадает ни под одну из известных блокируемых категорий.
+// DetectBlockedType identifies unsupported content for logging.
+// It returns an empty string when no blocked type matches.
 func DetectBlockedType(message *tgbotapi.Message) string {
 	switch {
 	case message.Sticker != nil:

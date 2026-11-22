@@ -1,5 +1,6 @@
 import { expect, test as base } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import type { Message, OperatorListItem, OperatorRole, SessionListItem } from '../src/types/api.js';
 
 const fixture = {
@@ -44,10 +45,12 @@ const test = base.extend<{
   sessionFixture: SessionListItem;
   operatorRole: OperatorRole;
   dashboardState: 'normal' | 'empty' | 'request-error';
+  transcriptTooLarge: boolean;
 }>({
   operatorRole: ['operator', { option: true }],
   dashboardState: ['normal', { option: true }],
-  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState }, useFixture) => {
+  transcriptTooLarge: [false, { option: true }],
+  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState, transcriptTooLarge }, useFixture) => {
     const session: SessionListItem = {
       id: 42, title: 'Fixture session', status: 'active', owner_operator_id: 7,
       client_user_id: null, executor_user_id: null, created_at: fixture.timestamp,
@@ -119,6 +122,16 @@ const test = base.extend<{
           return route.fulfill({ json: session });
         case 'GET /api/sessions/42/messages':
           return route.fulfill({ json: { messages, has_more: false } });
+        case 'GET /api/sessions/42/transcript':
+          if (transcriptTooLarge) return route.fulfill({ status: 422, json: { error: 'transcript exceeds export limits' } });
+          if (searchParams.get('format') === 'csv') {
+            return route.fulfill({ contentType: 'text/csv', body: 'content\nFixture transcript\n' });
+          }
+          if (searchParams.get('format') === 'pdf') {
+            return route.fulfill({ contentType: 'application/pdf', body: '%PDF-1.4\nfixture' });
+          }
+          unexpected.push('invalid transcript format');
+          return route.fulfill({ status: 400 });
         case 'GET /api/messages/2/media':
           return route.fulfill({ contentType: 'image/png', body: image });
         case 'GET /api/messages/3/media':
@@ -225,6 +238,86 @@ for (const [language, labels] of Object.entries(panelLabels)) {
     await expect(page.getByText(labels.queued, { exact: false })).toBeVisible();
   });
 }
+
+test('session transcript can be downloaded in both formats', async ({ page }) => {
+  await page.goto('/login');
+  await enterCredentials(page);
+  await enterTOTP(page);
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await page.getByRole('link', { name: 'Fixture session' }).click();
+  await expect(page.getByRole('heading', { name: 'Fixture session' })).toBeVisible();
+  for (const [format, body] of [['csv', 'content\nFixture transcript\n'], ['pdf', '%PDF-1.4\nfixture']]) {
+    const pending = page.waitForEvent('download');
+    await page.getByRole('button', { name: `Скачать ${format.toUpperCase()}` }).click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe(`session-42.${format}`);
+    expect(await readFile(await download.path(), 'utf8')).toBe(body);
+  }
+});
+
+test.describe('oversized transcript', () => {
+  test.use({ transcriptTooLarge: true });
+  test('shows the export limit when the server rejects a download', async ({ page }) => {
+    await page.goto('/login');
+    await enterCredentials(page);
+    await enterTOTP(page);
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.getByRole('link', { name: 'Fixture session' }).click();
+    await expect(page.getByRole('heading', { name: 'Fixture session' })).toBeVisible();
+    await page.getByRole('button', { name: 'Скачать PDF' }).click();
+    await expect(page.getByText('Переписка превышает лимит экспорта')).toBeVisible();
+  });
+});
+
+base('runtime branding applies the title, scheme, accent, and localized sign-in text', async ({ page }) => {
+  const product = 'North & Co «Панель»';
+  const ru = 'Вход сотрудников <North & Co>';
+  const en = 'Sign in to North & Co';
+  const encode = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+  await page.route('**/panel-config.json', route => route.fulfill({ json: {
+    productNameBase64: encode(product), primaryColor: 'teal', colorScheme: 'dark',
+    loginSubtitleRuBase64: encode(ru), loginSubtitleEnBase64: encode(en),
+  } }));
+  await page.goto('/login');
+  await expect(page).toHaveTitle(product);
+  await expect(page.getByRole('heading', { name: product })).toBeVisible();
+  await expect(page.getByText(ru, { exact: true })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'dark');
+  expect(await page.locator('html').evaluate(element =>
+    getComputedStyle(element).getPropertyValue('--mantine-primary-color-6').trim()
+  )).toBe(await page.locator('html').evaluate(element =>
+    getComputedStyle(element).getPropertyValue('--mantine-color-teal-6').trim()
+  ));
+  await page.getByRole('combobox', { name: panelLabels.ru.language }).selectOption('en');
+  await expect(page.getByText(en, { exact: true })).toBeVisible();
+  await expect(page.getByText(ru, { exact: true })).toHaveCount(0);
+});
+
+base('invalid optional runtime branding falls back to panel defaults', async ({ page }) => {
+  await page.route('**/panel-config.json', route => route.fulfill({ json: {
+    productNameBase64: '!', primaryColor: 'unsupported', colorScheme: 'unsupported',
+    loginSubtitleRuBase64: Buffer.from([0xff]).toString('base64'),
+  } }));
+  await page.goto('/login');
+  await expect(page).toHaveTitle('Панель Посредника');
+  await expect(page.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'light');
+  const colors = await page.locator('html').evaluate(element => {
+    const style = getComputedStyle(element);
+    return ['--mantine-primary-color-6', '--mantine-color-blue-6'].map(name => style.getPropertyValue(name).trim());
+  });
+  expect(colors[0]).toBeTruthy();
+  expect(colors[0]).toBe(colors[1]);
+  await expect(page.getByText('�')).toHaveCount(0);
+});
+
+base('automatic color scheme follows the browser', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.route('**/panel-config.json', route => route.fulfill({ json: { colorScheme: 'auto' } }));
+  await page.goto('/login');
+  await expect(page.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-mantine-color-scheme', 'light');
+});
 
 test('language persists after reload and translates the current sign-in step', async ({ page }) => {
   await page.goto('/login');

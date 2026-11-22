@@ -18,4 +18,5 @@ COPY --from=builder /admin /admin
 
 EXPOSE 8080
 
+USER 10001:10001
 CMD ["/api"]

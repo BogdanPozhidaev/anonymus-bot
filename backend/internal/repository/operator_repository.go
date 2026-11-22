@@ -80,9 +80,7 @@ func (r *OperatorRepository) GetByTelegramID(ctx context.Context, telegramID int
 	return r.scanOne(ctx, query, telegramID)
 }
 
-// scanOne выполняет запрос с ровно одним параметром $1 и сканирует строку в Operator.
-// Сам SQL-текст запроса всегда приходит из захардкоженных констант внутри этого файла,
-// никогда не собирается из внешнего ввода — параметризуется только значение поиска.
+// scanOne scans the result of a fixed query with a single bound argument.
 func (r *OperatorRepository) scanOne(ctx context.Context, query string, arg interface{}) (*models.Operator, error) {
 	var o models.Operator
 	err := r.pool.QueryRow(ctx, query, arg).Scan(

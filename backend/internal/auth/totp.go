@@ -6,8 +6,7 @@ import (
 	"github.com/pquerna/otp/totp"
 )
 
-// GenerateTOTPSecret создаёт новый секрет для оператора и URL для QR-кода,
-// который оператор отсканирует в приложении-аутентификаторе (Google Authenticator и т.п.).
+// GenerateTOTPSecret returns a new secret and an enrollment URL for an authenticator.
 func GenerateTOTPSecret(operatorLogin, issuer string) (secret string, otpAuthURL string, err error) {
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      issuer,

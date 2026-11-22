@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"net/http"
@@ -23,14 +24,18 @@ type listAuditLogQuery struct {
 	Format     string  `form:"format"` // "json" (default) | "csv"
 }
 
-// writeAuditLog — единая точка записи событий аудита. Ошибка записи
-// логируется, но не прерывает основной поток запроса — отказ аудита
-// не должен блокировать реальное действие пользователя.
+// writeAuditLog records an audit event on a best-effort basis.
+// A failed audit write is logged and the request continues.
 func (s *Server) writeAuditLog(c *gin.Context, actorID int64, actorType, action, targetType string, targetID int64, payload interface{}) {
+	if err := s.recordAuditLog(c.Request.Context(), c, actorID, actorType, action, targetType, targetID, payload); err != nil {
+		s.logger.Error("failed to write audit log", "error", err, "action", action)
+	}
+}
+
+func (s *Server) recordAuditLog(ctx context.Context, c *gin.Context, actorID int64, actorType, action, targetType string, targetID int64, payload interface{}) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		s.logger.Error("failed to marshal audit log payload", "error", err, "action", action)
-		return
+		return err
 	}
 
 	entry := &models.AuditLog{
@@ -49,21 +54,19 @@ func (s *Server) writeAuditLog(c *gin.Context, actorID int64, actorType, action,
 	if role, ok := getOperatorRole(c); actorType == "operator" && ok {
 		entry.ActorRole = &role
 	}
-	if err := s.auditLogRepo.Create(c.Request.Context(), entry); err != nil {
-		s.logger.Error("failed to write audit log", "error", err, "action", action)
-	}
+	return s.auditLogRepo.Create(ctx, entry)
 }
 
 // handleListAuditLog godoc
-// @Summary      Список записей аудита
-// @Description  Поддерживает фильтры и экспорт в CSV через ?format=csv
+// @Summary      List audit events
+// @Description  Supports filtering and CSV export via ?format=csv
 // @Tags         audit
 // @Produce      json
 // @Security     BearerAuth
-// @Param        actor_id query int false "ID актора"
-// @Param        action query string false "Тип действия"
-// @Param        target_type query string false "Тип цели"
-// @Param        format query string false "json или csv"
+// @Param        actor_id query int false "Actor ID"
+// @Param        action query string false "Action type"
+// @Param        target_type query string false "Target type"
+// @Param        format query string false "json or csv"
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/audit-log [get]
 func (s *Server) handleListAuditLog(c *gin.Context) {

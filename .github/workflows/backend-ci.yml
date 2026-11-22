@@ -46,7 +46,7 @@ jobs:
           working-directory: backend
 
       - name: Test
-        run: go test ./... -race -count=1 -coverpkg=./internal/api,./internal/auth,./internal/moderation -coverprofile=coverage.out
+        run: go test ./... -race -count=1 -coverpkg=./internal/api,./internal/auth,./internal/moderation,./internal/service -coverprofile=coverage.out
 
       - name: Check coverage
-        run: node ../.github/scripts/check-go-coverage.cjs coverage.out api auth moderation
+        run: node ../.github/scripts/check-go-coverage.cjs coverage.out api auth moderation service

@@ -40,9 +40,8 @@ type MessageCleanupResult struct {
 	Errors          []error
 }
 
-// Run удаляет сообщения (и связанные медиафайлы) сессий, закрытых раньше
-// MessageRetentionPeriod назад. При dryRun=true ничего не удаляется —
-// только подсчитывается, что было бы удалено.
+// Run cleans up eligible messages and media from closed sessions.
+// A dry run reports the candidates without deleting them.
 func (m *MessageCleaner) Run(ctx context.Context, dryRun bool) (*MessageCleanupResult, error) {
 	threshold := time.Now().Add(-m.config.MessageRetentionPeriod)
 

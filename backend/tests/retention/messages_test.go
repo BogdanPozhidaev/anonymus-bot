@@ -36,7 +36,7 @@ func TestMessageCleaner_Run_DeletesOldMessagesAndFiles(t *testing.T) {
 	if err := sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusClosed); err != nil {
 		t.Fatalf("failed to close session: %v", err)
 	}
-	ageSessionClosedAt(t, pool, session.ID, 13*30*24*time.Hour) // старше 12 месяцев
+	ageSessionClosedAt(t, pool, session.ID, 13*30*24*time.Hour) // Beyond the twelve-month cutoff.
 
 	fileID := "38c45a07-ff42-40ce-92f5-4f6e03dfaf22"
 	photoPath := filepath.Join(photosDir, fileID+".jpg")

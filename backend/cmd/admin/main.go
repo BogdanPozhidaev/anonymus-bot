@@ -33,7 +33,7 @@ func main() {
 
 func run(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: admin migrate up|status or admin create-admin --login LOGIN [--name NAME]")
+		return errors.New("usage: admin migrate up|status, admin create-admin --login LOGIN [--name NAME], or admin rotate-keys [--apply]")
 	}
 	switch args[0] {
 	case "migrate":
@@ -102,9 +102,38 @@ func run(args []string, in io.Reader, out io.Writer) error {
 			_, _ = fmt.Fprintln(out, "Administrator already exists; no changes made.")
 		}
 		return nil
+	case "rotate-keys":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--apply") {
+			return errors.New("usage: admin rotate-keys [--apply]")
+		}
+		return rotateKeys(out, len(args) == 2)
 	default:
-		return errors.New("unknown admin command; use migrate or create-admin")
+		return errors.New("unknown admin command; use migrate, create-admin or rotate-keys")
 	}
+}
+
+func rotateKeys(out io.Writer, apply bool) error {
+	encryption, err := config.LoadEncryption()
+	if err != nil {
+		return err
+	}
+	dsn, err := config.DatabaseURL()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	pool, err := db.NewPool(ctx, dsn)
+	if err != nil {
+		return errors.New("cannot connect to PostgreSQL; check database settings and availability")
+	}
+	defer pool.Close()
+	result, err := repository.RotateEncryptionKeys(ctx, pool, encryption.PII, encryption.TOTP, apply)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "applied=%t users=%d operators=%d\n", apply, result.Users, result.Operators)
+	return err
 }
 
 func readPassword(in io.Reader) (string, error) {

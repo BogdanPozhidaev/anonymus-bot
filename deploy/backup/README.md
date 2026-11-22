@@ -36,8 +36,11 @@ done
 bash deploy/backup/backup.sh restore "$project" "$env_file" /secure/snapshot
 ```
 
-Verify the restored schema version, operator access, session history and
-representative media files before allowing writers to run. The restore is
+Verify the restored schema version. The database archive excludes role
+grants. On the restored Compose project, apply any pending migrations and run
+the `db-permissions` service before starting backend or retention. Then verify
+operator access, session history and representative media files before
+allowing traffic. The restore is
 transactional for PostgreSQL. If media extraction or Docker fails after
 the database restore, discard the isolated target and restore again into an
 empty one. The script does not restart services or execute destructive

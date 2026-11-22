@@ -2,8 +2,10 @@ package retention_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,8 +47,7 @@ func TestPIIAnonymizer_Run_AnonymizesClosedSessionParticipants(t *testing.T) {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	// Закрываем сессию, затем искусственно "состариваем" closed_at
-	// на 4 месяца назад (retention period по умолчанию — 3 месяца).
+	// Set the closure time four months in the past, beyond the three-month default.
 	if err := sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusClosed); err != nil {
 		t.Fatalf("failed to close session: %v", err)
 	}
@@ -55,10 +56,23 @@ func TestPIIAnonymizer_Run_AnonymizesClosedSessionParticipants(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	entry := &models.AuditLog{ActorType: "user", ActorID: &client.ID, Action: "fixture",
+		Payload: []byte(`{"username":"fixture-participant","status":"kept"}`)}
+	if err := auditLogRepo.Create(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	broken := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, retention.NewAuditLogHasher(nil), config, logger)
+	result, err := broken.Run(ctx, false)
+	if err != nil || len(result.Errors) != 1 || result.UsersAnonymized != 1 {
+		t.Fatalf("expected audit hash failure only for the participant with audit PII: %+v, %v", result, err)
+	}
+	if got, err := userRepo.GetByID(ctx, client.ID); err != nil || got.TelegramID != 5001 {
+		t.Fatalf("audit failure must leave the participant eligible for retry: %v", err)
+	}
+	auditHasher := retention.NewAuditLogHasher(make([]byte, 32))
 	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 
-	result, err := anonymizer.Run(ctx, false)
+	result, err = anonymizer.Run(ctx, false)
 	if err != nil {
 		t.Fatalf("anonymizer run failed: %v", err)
 	}
@@ -66,8 +80,24 @@ func TestPIIAnonymizer_Run_AnonymizesClosedSessionParticipants(t *testing.T) {
 	if result.SessionsProcessed != 1 {
 		t.Errorf("expected 1 session processed, got %d", result.SessionsProcessed)
 	}
-	if result.UsersAnonymized != 2 {
-		t.Errorf("expected 2 users anonymized, got %d", result.UsersAnonymized)
+	if result.UsersAnonymized != 1 || len(result.Errors) != 0 {
+		t.Errorf("expected remaining user anonymized, got %+v", result)
+	}
+	entries, err := auditLogRepo.List(ctx, repository.AuditLogFilter{RelatedUserID: &client.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]string
+	for _, candidate := range entries {
+		if candidate.ID == entry.ID {
+			if err := json.Unmarshal(candidate.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if !strings.HasPrefix(payload["username"], "hmac-sha256:v1:") || payload["status"] != "kept" {
+		t.Fatal("retention did not persist the HMAC payload")
 	}
 
 	fetchedClient, err := userRepo.GetByID(ctx, client.ID)
@@ -114,7 +144,7 @@ func TestPIIAnonymizer_Run_DryRunDoesNotModifyData(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	auditHasher := retention.NewAuditLogHasher(make([]byte, 32))
 	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 	result, err := anonymizer.Run(ctx, true) // dry run
 	if err != nil {
@@ -125,7 +155,7 @@ func TestPIIAnonymizer_Run_DryRunDoesNotModifyData(t *testing.T) {
 		t.Errorf("expected 1 user reported in dry run, got %d", result.UsersAnonymized)
 	}
 
-	// Проверяем, что данные РЕАЛЬНО не изменились после dry run.
+	// Confirm that dry-run leaves the user data intact.
 	fetchedClient, err := userRepo.GetByID(ctx, client.ID)
 	if err != nil {
 		t.Fatalf("failed to get client: %v", err)
@@ -159,14 +189,14 @@ func TestPIIAnonymizer_Run_SkipsRecentlyClosedSessions(t *testing.T) {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	// Закрываем только что — closed_at ставится в now(), не старим искусственно.
+	// Use the current closure time to keep the session within its retention period.
 	if err := sessionRepo.UpdateStatus(ctx, session.ID, models.SessionStatusClosed); err != nil {
 		t.Fatalf("failed to close session: %v", err)
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	config := retention.DefaultConfig()
-	auditHasher := retention.NewAuditLogHasher(auditLogRepo, logger)
+	auditHasher := retention.NewAuditLogHasher(make([]byte, 32))
 	anonymizer := retention.NewPIIAnonymizer(sessionRepo, userRepo, auditLogRepo, auditHasher, config, logger)
 	result, err := anonymizer.Run(ctx, false)
 	if err != nil {

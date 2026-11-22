@@ -79,7 +79,16 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	worker := delivery.New(messages, botclient.New(fake.URL, "fixture"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	attempts := make(map[[2]bool]int)
+	worker := delivery.New(messages, botclient.New(fake.URL, "fixture"), slog.New(slog.NewTextHandler(io.Discard, nil)),
+		func(notice, success bool) { attempts[[2]bool{notice, success}]++ })
+	assertBacklog := func(wantQueued, wantRetrying int64) {
+		t.Helper()
+		queued, retrying, err := messages.OutboxBacklog(ctx)
+		if err != nil || queued != wantQueued || retrying != wantRetrying {
+			t.Fatalf("outbox backlog %d/%d, expected %d/%d: %v", queued, retrying, wantQueued, wantRetrying, err)
+		}
+	}
 	next := func(want bool) {
 		t.Helper()
 		ok, err := worker.ProcessNext(ctx)
@@ -108,6 +117,7 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 	}
 	text := enqueue("text")
 	assertState(text, "queued", false)
+	assertBacklog(1, 0)
 	next(false)
 
 	hash := sha256.Sum256(bytes.Repeat([]byte{1}, 32))
@@ -125,6 +135,7 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 		t.Fatal("incorrect queued text delivery")
 	}
 	assertState(text, "retrying", false)
+	assertBacklog(0, 1)
 	next(false)
 	if err := users.UpdateLanguage(ctx, 702, "en"); err != nil {
 		t.Fatal(err)
@@ -135,6 +146,7 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 		t.Fatal("retried delivery did not use the recipient's current language")
 	}
 	assertState(text, "delivered", true)
+	assertBacklog(0, 0)
 	next(false)
 
 	photo := enqueue("photo")
@@ -183,6 +195,10 @@ func TestOutboxWaitingRetryFailureAndDuplicateProcessing(t *testing.T) {
 	ready(voice)
 	next(true)
 	<-requests
+	if attempts[[2]bool{false, false}] != 6 || attempts[[2]bool{false, true}] != 2 ||
+		attempts[[2]bool{true, false}] != 1 || attempts[[2]bool{true, true}] != 1 {
+		t.Fatalf("unexpected number of recorded bot calls: %v", attempts)
+	}
 	assertState(voice, "failed", false)
 	next(false)
 }

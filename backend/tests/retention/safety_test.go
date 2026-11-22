@@ -42,7 +42,7 @@ func TestRetentionPreservesActiveParticipantAndFailedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := retention.DefaultConfig()
-	anonymizer := retention.NewPIIAnonymizer(sessions, users, audit, retention.NewAuditLogHasher(audit, logger), config, logger)
+	anonymizer := retention.NewPIIAnonymizer(sessions, users, audit, retention.NewAuditLogHasher(make([]byte, 32)), config, logger)
 	for _, dryRun := range []bool{true, false} {
 		result, err := anonymizer.Run(ctx, dryRun)
 		if err != nil || result.UsersAnonymized != 0 || len(result.Errors) != 0 {

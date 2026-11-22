@@ -11,10 +11,8 @@ type patternEntry struct {
 	pattern *regexp.Regexp
 }
 
-// patterns упорядочены от наиболее специфичной причины к наименее специфичной.
-// Порядок важен: если текст совпадает с несколькими паттернами одновременно
-// (например, email содержит и "@", похожий на username, и цифры в домене),
-// возвращается самая информативная причина, а не первая случайно найденная.
+// patterns lists contact detectors in priority order so overlapping matches
+// return the more specific reason, such as email before username.
 var patterns = []patternEntry{
 	{
 		name:    "email",
@@ -54,9 +52,8 @@ func normalizeWidth(text string) string {
 	}, text)
 }
 
-// ContainsContactInfo проверяет текст на наличие любого признака утечки контактов.
-// Проверяются ВСЕ паттерны; если совпало несколько, возвращается наиболее
-// специфичная причина согласно порядку в patterns (email важнее username и т.д.).
+// ContainsContactInfo checks for contact details and returns the first matching reason
+// in the configured pattern order.
 func ContainsContactInfo(text string) (bool, string) {
 	return matchContact(text, nil)
 }

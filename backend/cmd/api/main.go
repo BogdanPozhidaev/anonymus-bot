@@ -2,24 +2,25 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/api"
 	"github.com/fastcheck/anonymus_bot/backend/internal/auth"
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/config"
-	"github.com/fastcheck/anonymus_bot/backend/internal/crypto"
 	"github.com/fastcheck/anonymus_bot/backend/internal/db"
 	"github.com/fastcheck/anonymus_bot/backend/internal/delivery"
+	"github.com/fastcheck/anonymus_bot/backend/internal/metrics"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 	"github.com/gin-gonic/gin"
@@ -28,14 +29,14 @@ import (
 
 // @title           Anonymus Bot Backend API
 // @version         1.0
-// @description     API для веб-панели и внутреннего общения bot↔backend
+// @description     API for the operator panel and internal bot-to-backend communication
 // @contact.name    API Support
 // @host            localhost:8080
 // @BasePath        /
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-// @description Введите "Bearer <ваш_session_token>"
+// @description Enter "Bearer <session_token>"
 
 // readInternalAPIToken loads a hex-encoded 32-byte service token.
 func readInternalAPIToken(envName string) (string, error) {
@@ -81,9 +82,14 @@ func isInternalRequest(c *gin.Context) bool {
 	return path == "/internal" || strings.HasPrefix(path, "/internal/")
 }
 
-func newAPIRouter(logger *slog.Logger) *gin.Engine {
+func newAPIRouter(logger *slog.Logger, monitor *metrics.Metrics) *gin.Engine {
 	r := gin.New()
-	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Skip: isInternalRequest}))
+	if monitor != nil {
+		r.Use(monitor.Middleware)
+	}
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Skip: func(c *gin.Context) bool {
+		return isInternalRequest(c) || c.Request.URL.Path == config.OIDCCallbackPath
+	}}))
 	r.Use(func(c *gin.Context) {
 		c.Next()
 		if isInternalRequest(c) {
@@ -100,46 +106,61 @@ func newAPIRouter(logger *slog.Logger) *gin.Engine {
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, logger); err != nil && (ctx.Err() == nil || !errors.Is(err, context.Canceled)) {
+		logger.Error("backend stopped with an error", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("backend stopped")
+}
 
+func run(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.LoadAPI()
 	if err != nil {
-		logger.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	internalToken, err := readInternalAPIToken("INTERNAL_API_TOKEN_FILE")
 	if err != nil {
-		logger.Error("failed to load internal API token", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load internal API token: %w", err)
 	}
 	botToken, err := readInternalAPIToken("BOT_INTERNAL_TOKEN_FILE")
 	if err != nil {
-		logger.Error("failed to load bot internal API token", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load bot internal API token: %w", err)
+	}
+	var metricsToken string
+	if os.Getenv("METRICS_TOKEN_FILE") != "" {
+		metricsToken, err = readInternalAPIToken("METRICS_TOKEN_FILE")
+		if err != nil {
+			return fmt.Errorf("failed to load metrics token: %w", err)
+		}
+		if metricsToken == internalToken || metricsToken == botToken {
+			return errors.New("METRICS_TOKEN_FILE must use a separate credentials value")
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	startupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Подключение к Postgres
-	dbPool, err := db.NewPool(ctx, cfg.DatabaseURL)
+	dbPool, err := db.NewPool(startupCtx, cfg.DatabaseURL)
 	if err != nil {
-		logger.Error("cannot connect to PostgreSQL; check database settings and availability")
-		os.Exit(1)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("cannot connect to PostgreSQL, check database settings and availability")
 	}
 	defer dbPool.Close()
 	redisClient := redis.NewClient(cfg.Redis)
 	defer func() { _ = redisClient.Close() }()
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Error("cannot connect to Redis; check Redis settings and availability")
-		os.Exit(1)
+	if err := redisClient.Ping(startupCtx).Err(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("cannot connect to Redis, check Redis settings and availability")
 	}
-	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		logger.Error("could not initialize PII encryption")
-		os.Exit(1)
-	}
-	userRepo := repository.NewUserRepository(dbPool, encryptor)
+	cancel()
+	userRepo := repository.NewUserRepository(dbPool, cfg.Encryption.PII)
 	sessionRepo := repository.NewSessionRepository(dbPool)
 	incomingRequestRepo := repository.NewIncomingRequestRepository(dbPool)
 
@@ -147,14 +168,7 @@ func main() {
 	messageRepo := repository.NewMessageRepository(dbPool)
 	moderationService := moderation.NewService(redisClient, cfg.Moderation)
 	sessionService := auth.NewSessionService(redisClient)
-	totpKey := hmac.New(sha256.New, cfg.EncryptionKey)
-	_, _ = totpKey.Write([]byte("operator TOTP encryption v1"))
-	totpEncryptor, err := crypto.NewEncryptor(totpKey.Sum(nil))
-	if err != nil {
-		logger.Error("could not initialize TOTP encryption")
-		os.Exit(1)
-	}
-	pendingAuthService := auth.NewPendingAuthService(redisClient, totpEncryptor)
+	pendingAuthService := auth.NewPendingAuthService(redisClient, cfg.Encryption.TOTP)
 	auditLogRepo := repository.NewAuditLogRepository(dbPool)
 	botClient := botclient.New(cfg.BotURL, botToken)
 
@@ -164,22 +178,37 @@ func main() {
 		moderationService, sessionService, pendingAuthService, botClient,
 		cfg.PhotosDir, cfg.VoiceDir,
 	)
-	go delivery.New(messageRepo, botClient, logger).Run(context.Background())
-	r := newAPIRouter(logger)
+	var monitor *metrics.Metrics
+	var observeDelivery func(bool, bool)
+	if metricsToken != "" {
+		monitor = metrics.New(messageRepo.OutboxBacklog)
+		observeDelivery = monitor.RecordDeliveryAttempt
+	}
+	r := newAPIRouter(logger, monitor)
 	if err := configureClientIP(r, cfg.TrustedProxyIP); err != nil {
-		logger.Error("invalid trusted proxy configuration", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid trusted proxy configuration: %w", err)
+	}
+	if cfg.OIDC != nil {
+		server.EnableOIDC(auth.NewOIDC(*cfg.OIDC, &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}, redisClient))
 	}
 	server.RegisterRoutes(r, internalToken)
+	if monitor != nil {
+		r.GET(metrics.Path, gin.WrapH(monitor.Handler(metricsToken)))
+	}
 	if cfg.Swagger {
 		api.RegisterSwagger(r)
 	}
 
-	port := cfg.Port
-
-	logger.Info("starting server", "port", port)
-	if err := newHTTPServer(port, r).ListenAndServe(); err != nil {
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
+	httpServer := newHTTPServer(cfg.Port, r)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("listen for HTTP: %w", err)
 	}
+	worker := delivery.New(messageRepo, botClient, logger, observeDelivery)
+	logger.Info("starting server", "port", cfg.Port)
+	return serve(ctx, httpServer, listener, worker.Run, shutdownTimeout)
 }

@@ -70,8 +70,7 @@ func (h *OperatorHandler) HandleMenuCallback(ctx context.Context, callback *tgbo
 		}
 	}
 
-	// Повторная проверка whitelist на каждое действие — callback мог прийти
-	// спустя время, за которое статус оператора мог измениться (suspended/disabled).
+	// Recheck operator status on every callback because it may have changed.
 	operator, err := h.backend.GetOperatorByTelegramID(ctx, callback.From.ID)
 	if err != nil || !isActiveOperator(operator) {
 		h.answerCallback(callback.ID, tr(callback.From, "Доступ ограничен", "Access denied"))

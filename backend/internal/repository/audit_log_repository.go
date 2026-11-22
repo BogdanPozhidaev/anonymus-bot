@@ -4,17 +4,24 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 )
 
-type AuditLogRepository struct {
-	pool *pgxpool.Pool
+type auditLogDB interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
 
-func NewAuditLogRepository(pool *pgxpool.Pool) *AuditLogRepository {
-	return &AuditLogRepository{pool: pool}
+type AuditLogRepository struct {
+	db auditLogDB
+}
+
+func NewAuditLogRepository(db auditLogDB) *AuditLogRepository {
+	return &AuditLogRepository{db: db}
 }
 
 func (r *AuditLogRepository) Create(ctx context.Context, a *models.AuditLog) error {
@@ -27,7 +34,7 @@ func (r *AuditLogRepository) Create(ctx context.Context, a *models.AuditLog) err
 		RETURNING id, timestamp
 	`
 
-	err := r.pool.QueryRow(ctx, query,
+	err := r.db.QueryRow(ctx, query,
 		a.ActorID,
 		a.ActorRole,
 		a.Action,
@@ -70,7 +77,7 @@ func (r *AuditLogRepository) List(ctx context.Context, filter AuditLogFilter) ([
 		LIMIT $6 OFFSET $7
 	`
 
-	rows, err := r.pool.Query(ctx, query,
+	rows, err := r.db.Query(ctx, query,
 		filter.ActorID,
 		filter.Action,
 		filter.TargetType,
@@ -115,7 +122,7 @@ func (r *AuditLogRepository) List(ctx context.Context, filter AuditLogFilter) ([
 func (r *AuditLogRepository) UpdatePayload(ctx context.Context, id int64, payload []byte) error {
 	query := `UPDATE audit_log SET payload = $1 WHERE id = $2`
 
-	_, err := r.pool.Exec(ctx, query, payload, id)
+	_, err := r.db.Exec(ctx, query, payload, id)
 	if err != nil {
 		return fmt.Errorf("failed to update audit log payload: %w", err)
 	}

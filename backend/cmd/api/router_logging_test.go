@@ -13,7 +13,7 @@ import (
 
 func TestInternalRequestLoggingUsesRouteTemplate(t *testing.T) {
 	var logs bytes.Buffer
-	router := newAPIRouter(slog.New(slog.NewTextHandler(&logs, nil)))
+	router := newAPIRouter(slog.New(slog.NewTextHandler(&logs, nil)), nil)
 	const route = "/internal/users/by-telegram/:telegramID"
 	router.GET(route, func(c *gin.Context) {
 		c.Status(http.StatusNoContent)

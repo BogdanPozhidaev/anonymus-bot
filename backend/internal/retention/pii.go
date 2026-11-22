@@ -43,10 +43,8 @@ type PIIAnonymizeResult struct {
 	Errors            []error
 }
 
-// Run обрабатывает все сессии, закрытые раньше PIIRetentionPeriod назад,
-// и анонимизирует PII участников (клиента и исполнителя), если они ещё
-// не были анонимизированы ранее. При dryRun=true никакие изменения
-// в БД не производятся — только подсчёт того, что было бы сделано.
+// Run anonymizes eligible participants of sessions closed before the PII cutoff.
+// A dry run counts eligible participants without writing changes.
 func (a *PIIAnonymizer) Run(ctx context.Context, dryRun bool) (*PIIAnonymizeResult, error) {
 	threshold := time.Now().Add(-a.config.PIIRetentionPeriod)
 
@@ -70,7 +68,7 @@ func (a *PIIAnonymizer) Run(ctx context.Context, dryRun bool) (*PIIAnonymizeResu
 			if dryRun {
 				changed, err = a.userRepo.CanAnonymizeUser(ctx, userID, threshold)
 			} else {
-				changed, err = a.userRepo.AnonymizeUser(ctx, userID, threshold)
+				changed, err = a.userRepo.AnonymizeUser(ctx, userID, threshold, a.auditHasher.HashPIIForUser)
 			}
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("user %d anonymization: %w", userID, err))
@@ -82,12 +80,6 @@ func (a *PIIAnonymizer) Run(ctx context.Context, dryRun bool) (*PIIAnonymizeResu
 			if dryRun {
 				result.UsersAnonymized++
 				continue
-			}
-
-			if err := a.auditHasher.HashPIIForUser(ctx, userID); err != nil {
-				a.logger.Error("failed to hash PII in audit log for user", "error", err, "user_id", userID)
-				// Не считаем это фатальной ошибкой всей операции — сам пользователь
-				// уже анонимизирован, хэширование audit log — дополнительная мера.
 			}
 
 			a.writeAnonymizationAuditLog(ctx, userID, session.ID)

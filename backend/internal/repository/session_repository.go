@@ -293,8 +293,7 @@ func (r *SessionRepository) SetCloseRequestedBy(ctx context.Context, sessionID, 
 	return nil
 }
 
-// ListClosedBefore возвращает сессии, закрытые раньше указанного момента —
-// кандидаты для применения retention-политики.
+// ListClosedBefore returns sessions that were closed before the cutoff.
 func (r *SessionRepository) ListClosedBefore(ctx context.Context, threshold time.Time) ([]*models.Session, error) {
 	query := `
 		SELECT id, title, user_visible_name, client_user_id, executor_user_id,

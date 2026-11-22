@@ -11,19 +11,26 @@ export const options = {
     },
   },
   thresholds: {
-    http_req_duration: ['p(95)<1000'], // 95% запросов быстрее 1 секунды
-    http_req_failed: ['rate<0.01'],    // менее 1% ошибок
+    http_req_duration: ['p(95)<1000'], // 95% of requests complete within one second
+    http_req_failed: ['rate<0.01'],    // Fewer than 1% of requests fail
+    checks: ['rate==1'],
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
+const BASE_URL = __ENV.BASE_URL;
+if (!/^http:\/\/(?:127\.0\.0\.1|localhost)(?::[1-9][0-9]{0,4})?$/.test(BASE_URL)) {
+  throw new Error('BASE_URL must be a loopback HTTP origin for the disposable test');
+}
+if (!__ENV.INTERNAL_API_TOKEN_FILE) {
+  throw new Error('INTERNAL_API_TOKEN_FILE must point to the disposable test token');
+}
 const internalToken = open(__ENV.INTERNAL_API_TOKEN_FILE).trim();
 if (!/^[0-9a-fA-F]{64}$/.test(internalToken)) {
   throw new Error('INTERNAL_API_TOKEN_FILE must contain a 64-character hex token');
 }
 
 export default function () {
-  // __VU — номер виртуального пользователя (1..50), сопоставляем с seed-данными
+  // Map the virtual user number to the seeded fixtures.
   const senderTelegramID = 900000000 + __VU * 2;
 
   const payload = JSON.stringify({
@@ -44,12 +51,16 @@ export default function () {
 
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'response time < 1000ms': (r) => r.timings.duration < 1000,
-    'not blocked': (r) => {
-      const body = JSON.parse(r.body);
-      return body.blocked === false;
+    'message queued': (r) => {
+      if (r.status !== 200) return false;
+      try {
+        const body = r.json();
+        return body?.blocked === false && body.message_id > 0 && body.session_id > 0;
+      } catch {
+        return false;
+      }
     },
   });
 
-  sleep(1); // имитация реального интервала между сообщениями пользователя
+  sleep(1); // Simulate a gap between user messages.
 }

@@ -78,8 +78,8 @@ func (s *Server) handleGetOperatorByTelegramID(c *gin.Context) {
 }
 
 // handleListOperators godoc
-// @Summary      Список операторов
-// @Description  Доступно только администраторам
+// @Summary      List operators
+// @Description  Available to administrators only
 // @Tags         operators
 // @Produce      json
 // @Security     BearerAuth
@@ -267,8 +267,7 @@ func (s *Server) handleUpdateOperator(c *gin.Context) {
 		return
 	}
 
-	// При переводе в disabled — немедленный отзыв всех активных сессий
-	// и переназначение его сессий на admin (согласно разделу 16 ТЗ).
+	// Disabling an operator invalidates their access and reassigns their sessions.
 	if req.Status != nil && *req.Status == models.OperatorStatusDisabled && !wasDisabled {
 		if err := s.reassignSessionsToAdmin(ctx, operator.ID); err != nil {
 			s.logger.Error("failed to reassign sessions from disabled operator", "error", err, "operator_id", operator.ID)
@@ -281,9 +280,7 @@ func (s *Server) handleUpdateOperator(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// reassignSessionsToAdmin переназначает все сессии disabled-оператора
-// на первого найденного активного admin. Используется как аварийная мера,
-// чтобы сессии не остались без владельца.
+// reassignSessionsToAdmin moves the disabled operator's sessions to an active administrator.
 func (s *Server) reassignSessionsToAdmin(ctx context.Context, disabledOperatorID int64) error {
 	sessions, err := s.sessionRepo.ListByOperator(ctx, disabledOperatorID)
 	if err != nil {

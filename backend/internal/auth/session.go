@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,8 +40,7 @@ func NewSessionService(redisClient *redis.Client) *SessionService {
 	}
 }
 
-// Create создаёт новую сессию оператора, возвращает токен (случайный UUID),
-// который передаётся клиенту и используется как ключ поиска сессии в Redis.
+// Create stores an operator session and returns its random UUID token.
 func (s *SessionService) Create(ctx context.Context, data SessionData) (string, error) {
 	token := uuid.New().String()
 
@@ -53,21 +54,10 @@ func (s *SessionService) Create(ctx context.Context, data SessionData) (string, 
 		return "", fmt.Errorf("failed to store session: %w", err)
 	}
 
-	indexKey := operatorSessionsIndexKey(data.OperatorID)
-	if err := s.redisClient.SAdd(ctx, indexKey, token).Err(); err != nil {
-		return "", fmt.Errorf("failed to add session to operator index: %w", err)
-	}
-	// Индекс должен жить не дольше самой длинной возможной сессии,
-	// иначе он будет расти бесконечно для активных операторов.
-	if err := s.redisClient.Expire(ctx, indexKey, s.ttl).Err(); err != nil {
-		return "", fmt.Errorf("failed to set index ttl: %w", err)
-	}
-
 	return token, nil
 }
 
-// Get возвращает данные сессии по токену. Возвращает redis.Nil (через
-// errors.Is), если сессия не найдена или истекла/была отозвана.
+// Get returns the session identified by the token, or redis.Nil if it is missing.
 func (s *SessionService) Get(ctx context.Context, token string) (*SessionData, error) {
 	return s.get(ctx, sessionKey(token))
 }
@@ -104,42 +94,22 @@ func (s *SessionService) get(ctx context.Context, key string) (*SessionData, err
 	return &data, nil
 }
 
-// Revoke немедленно удаляет сессию — используется при disable оператора
-// или логауте.
+// Revoke removes both regular and password-change sessions for the token.
 func (s *SessionService) Revoke(ctx context.Context, token string) error {
 	return s.redisClient.Del(ctx, sessionKey(token), passwordChangeKey(token)).Err()
 }
 
-// RevokeAllForOperator отзывает все активные сессии конкретного оператора.
-// Требует хранения обратного индекса (operator_id -> список токенов),
-// который мы поддерживаем отдельно при создании сессии.
-func (s *SessionService) RevokeAllForOperator(ctx context.Context, operatorID int64) error {
-	indexKey := operatorSessionsIndexKey(operatorID)
-
-	tokens, err := s.redisClient.SMembers(ctx, indexKey).Result()
-	if err != nil {
-		return fmt.Errorf("failed to get operator sessions index: %w", err)
-	}
-
-	for _, token := range tokens {
-		if err := s.Revoke(ctx, token); err != nil {
-			return fmt.Errorf("failed to revoke operator session: %w", err)
-		}
-	}
-
-	return s.redisClient.Del(ctx, indexKey).Err()
-}
-
 func sessionKey(token string) string {
-	return fmt.Sprintf("session:%s", token)
+	return tokenKey("session", token)
 }
 
 func passwordChangeKey(token string) string {
-	return "password_change_session:" + token
+	return tokenKey("password_change_session", token)
 }
 
-func operatorSessionsIndexKey(operatorID int64) string {
-	return fmt.Sprintf("operator_sessions:%d", operatorID)
+func tokenKey(namespace, token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return namespace + ":sha256:" + hex.EncodeToString(digest[:])
 }
 
 func NewPendingAuthService(redisClient *redis.Client, secrets *crypto.Encryptor) *PendingAuthService {
@@ -150,25 +120,18 @@ func NewPendingAuthService(redisClient *redis.Client, secrets *crypto.Encryptor)
 	}
 }
 
-const totpSecretPrefix = "totp:v1:"
-
 func (s *PendingAuthService) EncodeTOTP(secret string) (string, error) {
 	if s.secrets == nil {
 		return "", errors.New("TOTP encryption unavailable")
 	}
-	encoded, err := s.secrets.Encrypt(secret)
-	return totpSecretPrefix + encoded, err
+	return s.secrets.EncryptTOTP(secret)
 }
 
 func (s *PendingAuthService) DecodeTOTP(encoded string) (secret string, legacy bool, err error) {
-	if !strings.HasPrefix(encoded, totpSecretPrefix) {
-		return encoded, true, nil
-	}
 	if s.secrets == nil {
 		return "", false, errors.New("TOTP encryption unavailable")
 	}
-	secret, err = s.secrets.Decrypt(strings.TrimPrefix(encoded, totpSecretPrefix))
-	return secret, false, err
+	return s.secrets.DecryptTOTP(encoded)
 }
 
 func (s *PendingAuthService) CreateEnrollment(ctx context.Context, operatorID, version int64, secret string) (string, error) {
@@ -249,9 +212,9 @@ return 1
 `)
 
 func pendingAuthKey(token string) string {
-	return fmt.Sprintf("pending_auth:%s", token)
+	return tokenKey("pending_auth", token)
 }
 
 func pendingEnrollmentKey(token string) string {
-	return "pending_totp:" + token
+	return tokenKey("pending_totp", token)
 }

@@ -2,8 +2,9 @@
 
 | Переменная | Описание | Пример |
 |---|---|---|
-| `POSTGRES_USER` | Имя пользователя Postgres | `app_user` |
-| `POSTGRES_PASSWORD` | Пароль Postgres | — (секрет) |
+| `POSTGRES_USER` | Владелец БД в Compose для миграций, резервного копирования и первичной настройки администратора | `app_user` |
+| `POSTGRES_PASSWORD` | Пароль владельца БД | — (секрет) |
+| `POSTGRES_RUNTIME_PASSWORD` | Отдельный пароль роли `anonymus_runtime` для backend и retention. Не менее 32 символов из букв ASCII, цифр, `_` и `-`, отличается от пароля владельца | — (секрет, обязателен для Compose) |
 | `POSTGRES_DB` | Имя базы данных | `mediator_bot` |
 | `POSTGRES_PORT` | Порт Postgres | `5432` |
 | `REDIS_PORT` | Порт Redis | `6379` |
@@ -21,8 +22,11 @@
 | `PANEL_HTTP_BIND` | Адрес публикации HTTP в базовом Compose | `0.0.0.0` |
 | `PANEL_HTTP_PORT` | Порт публикации HTTP в базовом Compose | `80` |
 | `PANEL_HTTPS_PORT` | Порт публикации HTTPS с TLS override | `443` |
+| `PANEL_HTTPS_BIND` | Адрес публикации HTTPS с TLS override | `0.0.0.0` |
 | `TLS_CERT_DIR` | Каталог сертификата и ключа, обязателен для TLS override | См. [DEPLOYMENT.md](DEPLOYMENT.md) |
-| `PII_ENCRYPTION_KEY` | Ключ AES-256 для шифрования PII, base64, 32 байта | — (секрет, генерируется через `openssl rand -base64 32`) |
+| `PII_ENCRYPTION_KEY` | Ключ AES-256 версии 1, base64, 32 байта. Нужен для чтения ранее сохранённых данных без версии | Секрет, обязателен при активной версии 1 |
+| `PII_ENCRYPTION_ACTIVE_VERSION` | Версия ключа для новых записей PII и TOTP. Из этого ключа также выводится отдельный ключ HMAC для retention | `1` |
+| `PII_ENCRYPTION_KEYS` | Дополнительные ключи через запятую в формате `версия:base64`. Версии от 2, по 32 случайных байта на ключ | Пусто. Порядок применения описан в [Operations](OPERATIONS.md#encryption-key-rotation) |
 | `RETENTION_RUN_HOUR` | Час запуска retention-джобы (0-23, UTC) | `03` |
 | `RETENTION_PII_MONTHS` | Через сколько месяцев после закрытия сессии анонимизируется PII | `3` |
 | `RETENTION_MESSAGE_MONTHS` | Через сколько месяцев после закрытия сессии удаляются сообщения/медиа | `12` |
@@ -33,9 +37,11 @@ On existing local Compose installations, add the Redis password before
 recreating Redis and backend together. Expect operators to sign in again
 if Redis loses its in-memory sessions. Preserve the existing PostgreSQL
 credentials and PII encryption key when reusing volumes. For standalone
-launches, set `DATABASE_URL` explicitly and supply Redis credentials in
-`REDIS_URL` or via `REDIS_PASSWORD`. Use `docker compose config --quiet`
-for validation so interpolated secrets are not printed.
+backend launches, set `DATABASE_URL` explicitly with the runtime login
+and supply Redis credentials in `REDIS_URL` or via `REDIS_PASSWORD`.
+The bot needs only its backend connection settings for these operations.
+Use `docker compose config --quiet` for validation so interpolated secrets
+are not printed.
 
 ### Internal API token
 
@@ -80,3 +86,59 @@ of a reverse proxy that overwrites `X-Real-IP`.
   identification value in the panel configuration.
 - `PANEL_PRODUCT_NAME` sets the panel title at container startup.
   For Vite development, use `VITE_BOT_USERNAME` and `VITE_PRODUCT_NAME`.
+
+### White-label settings
+
+All settings below are optional. Panel settings are public and are served
+through `/panel-config.json`. The panel renders configured text as plain text.
+
+| Compose variable | Behavior |
+|---|---|
+| `PANEL_PRIMARY_COLOR` | Mantine accent palette. Choose `blue` (default), `cyan`, `teal`, `green`, `grape`, `violet`, or `indigo`. |
+| `PANEL_COLOR_SCHEME` | Default scheme. Choose `light` (default), `dark`, or `auto` to match the browser. |
+| `PANEL_LOGIN_SUBTITLE_RU`, `PANEL_LOGIN_SUBTITLE_EN` | Optional text below the product name on the sign-in page. An empty value hides it for that language. |
+| `BOT_ORGANIZATION_NAME` | Name used by the built-in `/start` greetings. The configuration accepts up to 120 UTF-8 bytes. |
+| `BOT_JOINED_TEXT_RU`, `BOT_JOINED_TEXT_EN` | Override the greeting sent on successful invitation redemption. |
+| `BOT_REQUEST_RECEIVED_TEXT_RU`, `BOT_REQUEST_RECEIVED_TEXT_EN` | Override the reply to a new request or the neutral fallback greeting. |
+
+Each bot text accepts up to 1,000 UTF-8 bytes. Bot values are trimmed at
+the edges. Empty overrides use the built-in greeting for the selected
+language, including the organization name when configured. Set Vite
+counterparts with the `VITE_` prefix for the four new panel variables.
+
+Example `infra/.env` values for a single deployment:
+
+```dotenv
+PANEL_PRODUCT_NAME='North & Co Panel'
+PANEL_PRIMARY_COLOR=teal
+PANEL_COLOR_SCHEME=dark
+PANEL_LOGIN_SUBTITLE_RU='Вход сотрудников North & Co'
+PANEL_LOGIN_SUBTITLE_EN='North & Co staff sign-in'
+BOT_ORGANIZATION_NAME='North & Co'
+```
+
+### Optional monitoring
+
+These values apply when adding `infra/docker-compose.monitoring.yml`.
+
+| Compose variable | Behavior |
+|---|---|
+| `METRICS_TOKEN_FILE` | Absolute path to a dedicated 64-character hex token file shared by backend and Prometheus. Generate it independently of the two internal API tokens. |
+| `GRAFANA_ADMIN_PASSWORD_FILE` | Absolute path to the initial Grafana administrator password file. |
+| `GRAFANA_PORT` | Loopback port for Grafana, default `3000`. |
+
+Keep both files outside the repository and grant access to the relevant
+container users. See [Monitoring](OPERATIONS.md#monitoring).
+
+### Optional Telegram webhook
+
+The base Compose file uses polling. Add `docker-compose.webhook.yml`
+after the TLS override to select webhook mode.
+
+| Variable | Behavior |
+|---|---|
+| `BOT_UPDATE_MODE` | For standalone bot runs, `polling` (default) or `webhook`. The Compose files set this value for you. |
+| `TELEGRAM_WEBHOOK_URL` | Public HTTPS URL ending in `/telegram/webhook`. Use a Telegram-supported HTTPS port and keep the URL free of credentials, query strings and fragments. |
+| `TELEGRAM_WEBHOOK_SECRET_FILE` | Absolute path to a dedicated 64-character hex secret file. Keep it outside the repository and readable by bot UID 10001. |
+
+See [Telegram webhook operations](OPERATIONS.md#telegram-webhook).

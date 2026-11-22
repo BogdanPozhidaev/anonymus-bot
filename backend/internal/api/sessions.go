@@ -14,6 +14,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
+	"github.com/fastcheck/anonymus_bot/backend/internal/service"
 )
 
 type bindSessionRequest struct {
@@ -64,11 +65,6 @@ func (s *Server) handleBindSession(c *gin.Context) {
 		return
 	}
 
-	hash, ok := inviteTokenHash(req.Token)
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "invitation unavailable"})
-		return
-	}
 	ctx := c.Request.Context()
 	user := &models.User{TelegramID: req.TelegramID, LanguageCode: "ru"}
 	if req.LanguageCode != "" {
@@ -80,7 +76,7 @@ func (s *Server) handleBindSession(c *gin.Context) {
 	if req.FirstName != "" {
 		user.FirstName = &req.FirstName
 	}
-	session, role, err := s.sessionRepo.BindInvite(ctx, s.userRepo, hash, user)
+	session, role, err := s.sessionFlow.Bind(ctx, req.Token, user)
 	if errors.Is(err, repository.ErrInviteUnavailable) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "invitation unavailable"})
 		return
@@ -97,8 +93,8 @@ func (s *Server) handleBindSession(c *gin.Context) {
 }
 
 // handleListSessions godoc
-// @Summary      Список сессий
-// @Description  Admin видит все сессии, operator — только свои
+// @Summary      List sessions
+// @Description  Administrators see all sessions, operators see sessions they own
 // @Tags         sessions
 // @Produce      json
 // @Security     BearerAuth
@@ -162,19 +158,18 @@ func (s *Server) handleListSessions(c *gin.Context) {
 }
 
 // handleGetSession godoc
-// @Summary      Получить сессию по ID
+// @Summary      Get a session by ID
 // @Tags         sessions
 // @Produce      json
 // @Security     BearerAuth
-// @Param        id path int true "ID сессии"
+// @Param        id path int true "Session ID"
 // @Success      200 {object} models.Session
 // @Failure      403 {object} map[string]string
 // @Failure      404 {object} map[string]string
 // @Router       /api/sessions/{id} [get]
 func (s *Server) handleGetSession(c *gin.Context) {
-	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+	sessionID, ok := readSessionID(c)
+	if !ok {
 		return
 	}
 
@@ -198,10 +193,7 @@ func (s *Server) handleGetSession(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
-// canAccessSession — единая проверка прав доступа к конкретной сессии:
-// admin видит всё, operator — только сессии, где он owner. Вынесена
-// отдельно, чтобы использовать во всех хендлерах, работающих с одной
-// сессией по ID, и не дублировать эту логику безопасности в каждом месте.
+// canAccessSession allows administrators and the operator who owns the session.
 func (s *Server) canAccessSession(c *gin.Context, session *models.Session) bool {
 	role, _ := getOperatorRole(c)
 	if role == models.OperatorRoleAdmin {
@@ -213,12 +205,12 @@ func (s *Server) canAccessSession(c *gin.Context, session *models.Session) bool 
 }
 
 // handleCreateSession godoc
-// @Summary      Создать сессию
+// @Summary      Create a session
 // @Tags         sessions
 // @Accept       json
 // @Produce      json
 // @Security     BearerAuth
-// @Param        request body createSessionRequest true "Данные сессии"
+// @Param        request body createSessionRequest true "Session details"
 // @Success      201 {object} models.Session
 // @Router       /api/sessions [post]
 func (s *Server) handleCreateSession(c *gin.Context) {
@@ -248,7 +240,6 @@ func (s *Server) handleCreateSession(c *gin.Context) {
 		return
 	}
 
-	// Создатель сразу становится владельцем сессии.
 	if err := s.sessionRepo.AssignOwner(ctx, session.ID, operatorID); err != nil {
 		s.logger.Error("failed to assign creator as owner", "error", err, "session_id", session.ID)
 	}
@@ -275,9 +266,8 @@ type updateSessionStatusRequest struct {
 // @Failure      413 {object} map[string]string
 // @Router       /api/sessions/{id}/status [patch]
 func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
-	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+	sessionID, ok := readSessionID(c)
+	if !ok {
 		return
 	}
 
@@ -308,13 +298,11 @@ func (s *Server) handleUpdateSessionStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
-	if req.Status == models.SessionStatusActive {
-		if err := s.moderationService.Reset(ctx, session.ID); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "moderation unavailable; try again"})
-			return
-		}
+	changed, err := s.sessionFlow.ChangeStatus(ctx, session, req.Status)
+	if errors.Is(err, service.ErrModerationUnavailable) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "moderation unavailable; try again"})
+		return
 	}
-	changed, err := s.sessionRepo.TransitionStatus(ctx, sessionID, session.Status, req.Status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
 		return
@@ -338,9 +326,8 @@ type assignOwnerRequest struct {
 }
 
 func (s *Server) handleAssignSessionOwner(c *gin.Context) {
-	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+	sessionID, ok := readSessionID(c)
+	if !ok {
 		return
 	}
 
@@ -362,7 +349,7 @@ func (s *Server) handleAssignSessionOwner(c *gin.Context) {
 		return
 	}
 
-	// Переназначение владельца — только admin, либо текущий владелец сессии.
+	// Only administrators and the current owner can reassign a session.
 	if !s.canAccessSession(c, session) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
@@ -394,9 +381,8 @@ func (s *Server) handleListSessionMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+	sessionID, ok := readSessionID(c)
+	if !ok {
 		return
 	}
 
@@ -567,7 +553,7 @@ func (s *Server) handleStopSession(c *gin.Context) {
 
 	s.writeAuditLog(c, user.ID, "user", "session_stop_requested", "session", session.ID, nil)
 
-	// Уведомляем вторую сторону нейтральным сообщением.
+	// Notify the counterpart that a participant requested closure.
 	var counterpartUserID *int64
 	if session.ClientUserID != nil && *session.ClientUserID == user.ID {
 		counterpartUserID = session.ExecutorUserID

@@ -1,6 +1,7 @@
 import { sessionStatusMessages, usePanelLocale } from '../i18n/panelLocale';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import {
   Title,
   Badge,
@@ -23,7 +24,7 @@ import { IconCopy, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
 import { assignSessionOwner, getSession, issueSessionInvite, revokeSessionInvite, updateSessionStatus } from '../api/sessions';
-import { listMessages, sendAsParticipant } from '../api/messages';
+import { downloadTranscript, listMessages, sendAsParticipant, type TranscriptFormat } from '../api/messages';
 import { listOperators } from '../api/operators';
 import { panelConfig } from '../panelConfig';
 import { useAuthStore } from '../stores/authStore';
@@ -62,6 +63,16 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
     refetchInterval: offset === 0 ? 5000 : false,
   });
   const messages = history?.messages;
+
+  const transcriptExport = useMutation({
+    mutationFn: (format: TranscriptFormat) => downloadTranscript(sessionId, format),
+    onError: (err) => notifications.show({
+      message: isAxiosError(err) && err.response?.status === 422
+        ? t('transcriptTooLarge')
+        : t('transcriptExportFailed'),
+      color: 'red',
+    }),
+  });
 
   const statusMutation = useMutation({
     mutationFn: (status: SessionStatus) => updateSessionStatus(sessionId, status),
@@ -132,6 +143,14 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
       </Paper>
 
       <Divider label={t('conversation')} />
+      <Group justify="end" gap="xs">
+        <Button variant="light" disabled={transcriptExport.isPending} onClick={() => transcriptExport.mutate('csv')}>
+          {t('exportTranscriptCSV')}
+        </Button>
+        <Button variant="light" disabled={transcriptExport.isPending} onClick={() => transcriptExport.mutate('pdf')}>
+          {t('exportTranscriptPDF')}
+        </Button>
+      </Group>
 
       <Paper withBorder p="md">
         {(offset > 0 || history?.has_more) && (

@@ -18,6 +18,13 @@ type Delivery struct {
 	Notice, CanNotify                                         bool
 }
 
+func (r *MessageRepository) OutboxBacklog(ctx context.Context) (queued, retrying int64, err error) {
+	err = r.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'queued'), count(*) FILTER (WHERE status = 'retrying')
+		FROM message_outbox WHERE status IN ('queued', 'retrying')`).Scan(&queued, &retrying)
+	return queued, retrying, err
+}
+
 func (r *MessageRepository) Enqueue(ctx context.Context, m *models.Message) error {
 	m.Delivered = false
 	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {

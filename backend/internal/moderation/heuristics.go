@@ -5,8 +5,7 @@ import (
 	"unicode"
 )
 
-// suspiciousPhrases — фразы, указывающие на попытку договориться об обходе
-// платформы. Проверка регистронезависимая, по вхождению подстроки.
+// suspiciousPhrases contains substrings associated with bypassing the platform.
 var suspiciousPhrases = []string{
 	"созвонимся",
 	"созвонимся в",
@@ -36,8 +35,7 @@ var suspiciousPhrases = []string{
 	"let's talk off platform",
 }
 
-// ContainsSuspiciousPhrase проверяет текст на наличие фраз, типичных для
-// попытки договориться об обходе платформы. Проверка регистронезависимая.
+// ContainsSuspiciousPhrase checks for suspicious substrings without regard to case.
 func ContainsSuspiciousPhrase(text string) (bool, string) {
 	words := strings.FieldsFunc(strings.ToLower(normalizeWidth(text)), func(r rune) bool {
 		return r != '\'' && !unicode.IsLetter(r) && !unicode.IsNumber(r)

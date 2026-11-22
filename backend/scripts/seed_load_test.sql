@@ -1,5 +1,5 @@
--- Создаёт 50 тестовых сессий с привязанными client/executor для нагрузочного теста.
--- Использовать ТОЛЬКО на тестовой БД, не на проде.
+-- Creates 50 fixture sessions with both participants for the load test.
+-- Run only against a disposable test database.
 
 DO $$
 DECLARE

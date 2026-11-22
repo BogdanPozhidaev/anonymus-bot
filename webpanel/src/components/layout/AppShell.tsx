@@ -31,8 +31,7 @@ export function AppShell() {
     try {
       await logoutRequest();
     } catch {
-      // Даже если запрос на backend не удался, разлогиниваем локально —
-      // токен уже мог истечь, нет смысла блокировать пользователя.
+      // Discard the local session even if the API sign-out fails.
     }
     queryClient.clear();
     logout();

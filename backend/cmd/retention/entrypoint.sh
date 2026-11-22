@@ -9,7 +9,7 @@ esac
 echo "Retention cron started, running once per day at configured hour"
 
 while true; do
-    current_hour=$(date +%H)
+    current_hour=$(date -u +%H)
 
     if [ "$current_hour" = "$RETENTION_RUN_HOUR" ]; then
         echo "$(date -Iseconds) Running retention job..."

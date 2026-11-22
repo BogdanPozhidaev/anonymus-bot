@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,7 +42,7 @@ func main() {
 	logger.Info("bot authorized", "username", bot.Self.UserName)
 
 	backend := backendclient.New(cfg.BackendURL, cfg.InternalAPIToken)
-	startHandler := handlers.NewStartHandler(bot, backend, logger)
+	startHandler := handlers.NewStartHandler(bot, backend, logger, cfg.StartBranding)
 	helpHandler := handlers.NewHelpHandler(bot, logger)
 	languageHandler := handlers.NewLanguageHandler(bot, backend, logger)
 	operatorHandler := handlers.NewOperatorHandler(bot, backend, logger)
@@ -141,12 +142,31 @@ func main() {
 		logger.Info("received unsupported message type")
 	}
 
-	logger.Info("bot started, listening for updates", "concurrency", updateConcurrency)
-
-	d := dispatcher.New(handleUpdate, updateConcurrency, logger)
-	pollBot := *bot
-	pollBot.Client = pollingHTTPClient{ctx: ctx, client: telegramHTTP}
-	pollUpdates(ctx, &pollBot, d, logger)
+	updateBot := *bot
+	updateBot.Client = pollingHTTPClient{ctx: ctx, client: telegramHTTP}
+	var updateErr error
+	if cfg.UpdateMode == config.UpdateWebhook {
+		var listenConfig net.ListenConfig
+		listener, err := listenConfig.Listen(ctx, "tcp", ":9091")
+		if err != nil {
+			updateErr = err
+		} else {
+			updateErr = runWebhook(ctx, listener, newWebhookHandler(cfg.WebhookSecret, handleUpdate, logger), func() error {
+				if err := registerWebhook(&updateBot, cfg.WebhookURL, cfg.WebhookSecret); err != nil {
+					return err
+				}
+				logger.Info("bot started, listening for webhook updates")
+				return nil
+			})
+		}
+	} else if updateErr = usePolling(&updateBot); updateErr == nil {
+		logger.Info("bot started, polling for updates", "concurrency", updateConcurrency)
+		pollUpdates(ctx, &updateBot, dispatcher.New(handleUpdate, updateConcurrency, logger), logger)
+	}
 	stopInternal()
 	<-internalDone
+	if updateErr != nil && ctx.Err() == nil {
+		logger.Error("bot update receiver failed", "error", updateErr)
+		os.Exit(1)
+	}
 }

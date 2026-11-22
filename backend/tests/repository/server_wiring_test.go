@@ -87,7 +87,7 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 	}))
 	defer fake.Close()
 	botClient := botclient.New(fake.URL, botToken)
-	worker := delivery.New(messages, botClient, slog.Default())
+	worker := delivery.New(messages, botClient, slog.Default(), nil)
 	send := func() {
 		t.Helper()
 		if ok, err := worker.ProcessNext(ctx); !ok || err != nil {
@@ -496,6 +496,46 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 		}
 		if len(notices) != 2 {
 			t.Fatal("opt-in automatic pause did not notify both participants")
+		}
+	})
+
+	t.Run("relay decisions preserve queue boundaries", func(t *testing.T) {
+		user := models.User{TelegramID: 605, LanguageCode: "en"}
+		if err := users.Create(ctx, &user); err != nil {
+			t.Fatal(err)
+		}
+		waiting := models.Session{Title: "Waiting fixture", Status: models.SessionStatusActive, Language: "en", ClientUserID: &user.ID}
+		if err := sessions.Create(ctx, &waiting); err != nil {
+			t.Fatal(err)
+		}
+		relay := func(reason string, queued bool) {
+			t.Helper()
+			body := request(t, http.MethodPost, "/internal/messages/relay", `{"sender_telegram_id":605,"content_type":"text","content":"fixture"}`, "", http.StatusOK)
+			var got struct {
+				Blocked   bool   `json:"blocked"`
+				Reason    string `json:"block_reason"`
+				MessageID int64  `json:"message_id"`
+			}
+			if err := json.Unmarshal([]byte(body), &got); err != nil || !got.Blocked || got.Reason != reason || (got.MessageID > 0) != queued {
+				t.Fatalf("unexpected relay result: %+v, %v", got, err)
+			}
+		}
+		relay("no_active_session", false)
+		if err := users.SetActiveSession(ctx, user.ID, session.ID); err != nil {
+			t.Fatal(err)
+		}
+		relay("session_not_active", false)
+		if err := sessions.UpdateStatus(ctx, session.ID, models.SessionStatusActive); err != nil {
+			t.Fatal(err)
+		}
+		relay("sender_not_in_session", false)
+		if err := users.SetActiveSession(ctx, user.ID, waiting.ID); err != nil {
+			t.Fatal(err)
+		}
+		relay("counterparty_not_bound_yet", true)
+		var queued int
+		if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM message_outbox JOIN messages ON messages.id=message_outbox.message_id WHERE session_id=$1", waiting.ID).Scan(&queued); err != nil || queued != 1 {
+			t.Fatalf("expected exactly one waiting message: %d, %v", queued, err)
 		}
 	})
 

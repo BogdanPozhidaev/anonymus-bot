@@ -22,6 +22,17 @@ type Session struct {
 	CreatedAt           time.Time  `db:"created_at" json:"created_at"`
 }
 
+// ParticipantRole returns the participant's role and the other slot.
+func (s *Session) ParticipantRole(userID int64) (role string, counterpartID *int64) {
+	if s.ClientUserID != nil && *s.ClientUserID == userID {
+		return SenderRoleClient, s.ExecutorUserID
+	}
+	if s.ExecutorUserID != nil && *s.ExecutorUserID == userID {
+		return SenderRoleExecutor, s.ClientUserID
+	}
+	return "", nil
+}
+
 const (
 	SessionStatusActive       = "active"
 	SessionStatusPaused       = "paused"

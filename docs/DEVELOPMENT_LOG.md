@@ -481,6 +481,260 @@ Use this file as an append-only record of verified work. Add date, task/issue ID
   No new migration is needed. No working-stand or GitHub PR run was
   part of this verification.
 
+## 2026-11-22 — P2-1 and P2-2 source and repository cleanup
+
+- Translated current source comments and regenerated Swagger with
+  swag v1.16.6. Compared Go tokens in 32 comment-only files and checked
+  Swagger paths, models, parameters and response codes. Preserved the
+  original migration files.
+- Removed the unused Redis setting from the bot and its Compose
+  service. Removed the unused backend session index and message
+  deletion helpers, and stopped reading and writing the legacy media
+  path. The existing schema and session-token validation still apply.
+- Removed both tracked coverage snapshots, added ignore rules, and
+  renamed the retention test helper. CI still generates and checks
+  fresh coverage profiles.
+- Full `go test ./... -race -count=1` suites passed with the CI coverage
+  flags. Coverage was API 76.4%, auth 87.7%, moderation 100%, and bot
+  handlers 77.6%. golangci-lint v2.11.4, frontend lint and typecheck,
+  both Compose config checks, and separate backend and bot Docker
+  builds passed. Test database migrations used disposable databases.
+
+## 2026-11-22 — P2-7 backend shutdown
+
+- Added SIGTERM and interrupt handling. The HTTP listener closes and
+  active requests have up to 100 seconds to finish. The delivery
+  worker stops claiming items and lets a claimed item finish its send
+  and database update. Compose gives the backend two minutes to exit.
+- `go test ./cmd/api -run 'Test(Serve|HTTPServer|ClientIP)' -race -count=5`
+  passed. Tests exercised an active request during shutdown, forced
+  close at the deadline, listener failure, worker timeout and the
+  established HTTP timeout and proxy settings.
+- Targeted repository tests passed with temporary PostgreSQL and a
+  fake bot. One in-flight delivery was written as delivered after
+  cancellation, and the next message remained queued and unclaimed.
+- Base and dev `docker compose config --quiet` passed. On a disposable
+  Compose project, `docker compose stop backend` produced the
+  `backend stopped` log and exit code 0. Containers and volumes were
+  removed. The working stand and Telegram were outside the check.
+- Full backend `go test ./... -race -count=1` passed with CI coverage
+  flags. Coverage was API 76.4%, auth 87.7%, and moderation 100%.
+  `go vet ./...` and golangci-lint v2.11.4 passed.
+
+## 2026-11-23 — P2-4 container hardening
+
+- Backend, migration, bot, retention and panel now use UID/GID 10001.
+  Compose sets read-only roots and CPU, memory and PID limits. Edge
+  Nginx retains a restricted master and runs workers as nginx.
+  PostgreSQL uses the upstream privilege-dropping entrypoint.
+- Media initialization prepares fresh volumes and existing top-level
+  files. Verified API reads from read-only mounts, ImageMagick writes
+  as the bot UID and fixture removal as the retention UID.
+  The same Redis password is still required. Its AOF and data volume
+  preserve Redis state across container replacement.
+- `bash infra/check-hardening.sh` passed on Docker Desktop. It built
+  backend, bot, retention and panel, validated base, dev and TLS
+  Compose, fetched HTTP and certificate-verified HTTPS health,
+  checked the panel's JS MIME type and runtime branding, ran retention
+  in dry-run mode, and verified Redis refused unauthenticated calls
+  and restored a test key after recreation.
+- The isolated migration round-trip test with `-race -count=1`
+  and all nine Playwright scenarios passed. actionlint validated
+  the updated infrastructure workflow. GitHub PR execution and
+  production certificate, token-file and volume permissions were
+  outside the local verification.
+
+## 2026-11-23 — P2-5 encryption rotation and credential storage
+
+- Backend and retention accept a versioned AES-GCM keyring. Existing
+  unversioned PII and TOTP ciphertexts remain readable using version 1.
+  The `admin rotate-keys` check scans stored values without writing;
+  `--apply` rewrites outdated values in one transaction. Tests confirmed
+  rollback on corrupted data, refusal during conflicting writes,
+  preservation of operator authentication state, and a zero-change
+  rerun after removing the retired key from the test configuration.
+- Audit retention writes salted HMAC-SHA-256 for the existing PII field
+  scope. A failed digest update rolls back participant anonymization,
+  which leaves the participant eligible for retry. The existing audit
+  history is outside the key rotation command.
+- Redis uses SHA-256 keys for regular and password-change sessions,
+  pending authentication and TOTP enrollment. Integration tests checked
+  TTLs, revocation, one-time challenge consumption, and rejection of
+  both a legacy key and an attempted bearer token using the stored digest.
+- The focused Go tests for crypto, config, auth, retention and admin passed
+  with `-race -count=1`. The PostgreSQL and Redis tests passed in
+  disposable containers. The full backend `go test -race -count=1 -p 2 ./...`,
+  backend `go vet ./...`, and the full bot `go test -race -count=1 ./...`
+  passed.
+- `bash infra/check-hardening.sh` passed after correcting the rotation
+  fixture invocation. It validated base, dev and TLS Compose and
+  exercised check, apply, and check with only the active key from the
+  built backend image. Temporary containers and volumes were removed.
+- See [Operations](OPERATIONS.md#encryption-key-rotation) for maintenance,
+  key retirement, backups and the one-time operator re-login. The GitHub
+  workflow run and rotation of production data were outside this check.
+
+## 2026-11-23 — P2-6 PostgreSQL integrity and runtime privileges
+
+- Migration `000011_participant_integrity` rejects the same participant
+  in both slots of one session while allowing empty slots and reuse
+  across sessions. It protects participant, sender and creator references,
+  clears a deleted operator's assignment where otherwise allowed,
+  and adds five indexes for foreign-key lookups. The existing
+  `idx_audit_log_action_order` already covers the action filter.
+- Compose now gives backend and retention the separate `anonymus_runtime`
+  login. The one-shot `db-permissions` job waits for a successful
+  migration, provisions explicit grants and verifies runtime login.
+  Schema migrations, first-admin bootstrap and backups use the owner.
+- `go test ./tests/repository -run '^Test(ParticipantIntegrityMigration|AllMigrationsRoundTrip)$' -race -count=1`
+  passed on disposable PostgreSQL. Tests verified legacy conflict
+  rejection without row edits, migration state recovery and retry,
+  allowed cross-session membership, FK actions and reversible migration.
+- `bash infra/check-hardening.sh` passed. The disposable Compose project
+  verified base, dev and TLS configurations, repeated role provisioning,
+  allowed runtime operations and denied schema, audit and bootstrap
+  operations. Backend and retention used the runtime login. The project
+  removed its temporary containers and volumes. `actionlint` v1.7.12
+  validated the infrastructure workflow.
+- Full backend `go test -race -count=1 -p 2 ./...`, bot
+  `go test -race -count=1 ./...`, and backend `go vet ./...` passed.
+  Shell syntax, Go formatting and `git diff --check` passed.
+- [Deployment](DEPLOYMENT.md#postgresql-roles-and-upgrade-to-schema-11)
+  documents the password and existing-data check. Production migration,
+  restore and GitHub CI execution were outside this validation.
+
+## 2026-11-23 — P2-3 service layer and P2-8 coverage and k6
+
+- Extracted participant relay, invitation binding and session status
+  transitions into `backend/internal/service`. Gin keeps request
+  validation, authorization and response mapping. The API uses a common
+  session ID parser and the session model resolves participant roles.
+- Focused router integration tests passed for authorization, invite
+  lifecycle, relay decisions, media, moderation and status changes.
+  The relay tests distinguish rejected messages from messages that must
+  stay queued while the counterpart is absent.
+- Backend CI now measures the service package separately at the existing
+  70% floor. A synthetic coverage profile confirmed that the checker
+  rejects 69% and accepts 70%. Backend `go vet ./...` and the workflow
+  syntax check passed.
+- Full race tests and coverage gates passed with the CI package lists.
+  The backend ran `go test ./... -race -count=1 -p 2 -coverpkg=./internal/api,./internal/auth,./internal/moderation,./internal/service -coverprofile=<temporary-profile>`
+  directly under Go 1.26.0 after a local toolchain mismatch. Coverage
+  was API 76.4%, auth 88.4%, moderation 100%, and service 89.1%.
+  Bot `go test ./... -race -count=1 -coverpkg=./internal/handlers -coverprofile=<temporary-profile>`
+  yielded 77.6% for handlers.
+- `RUN_K6_RELAY=1 go test ./tests/repository -run '^TestK6AuthenticatedRelay$' -count=1 -v`
+  passed with k6 2.2.0 on isolated PostgreSQL and Redis. All 250 HTTP
+  requests succeeded and 250 messages remained queued in 50 sessions,
+  with no sender mismatches. Local HTTP p95 was 56.9 ms. Initialization
+  rejected a non-loopback base URL. The delivery worker stayed off and
+  no Telegram requests were made.
+- [Operations](OPERATIONS.md#isolated-k6-relay-check) documents the
+  repeatable test. GitHub CI execution and production load were outside
+  local validation.
+
+## 2026-11-23 — P3 white-label
+
+- The panel loads an accent palette, default light/dark/auto scheme and
+  localized sign-in subtitles from runtime configuration alongside the
+  existing name and bot username. Container startup validates theme settings.
+  The browser renders branding as plain text and falls back on malformed
+  optional fields. The bot supports an optional organization name and
+  independent Russian/English `/start` greetings for joins and requests.
+- Panel `npm.cmd run lint` and `npm.cmd run test:e2e` passed. The latter
+  built the production bundle and passed 12 Chromium tests, including
+  runtime branding, malformed optional values and system theme switching.
+- Bot `go test -race -count=1 ./...` passed with local Telegram and backend
+  stubs for customized and default replies. The CI coverage check passed
+  at 78.1% for handlers.
+- `bash infra/check-hardening.sh` passed in the disposable Compose project.
+  It checked base, dev and TLS configuration, the production panel's
+  runtime JSON, invalid-accent rejection and delivery of the branding
+  environment to the bot container. The bot process did not start in
+  that Compose check.
+- See [White-label settings](ENV_VARS.md#white-label-settings) for variables
+  and example values. Production rollout, GitHub CI execution and delivery
+  through the real Telegram API were outside this validation.
+
+## 2026-11-23 — P3 monitoring
+
+- Backend optionally exports Prometheus metrics with a dedicated Bearer
+  token. HTTP metrics use route templates and status classes. The outbox
+  collector reports queued/retrying counts or a collection failure within
+  its query deadline. The delivery counters track bot service calls and
+  their outcomes separately from persisted delivery status.
+- The Compose override provisions Prometheus and Grafana OSS with bounded
+  resources and separate data volumes. Grafana is bound to loopback and
+  requires authentication. Prometheus has no host port and Nginx blocks
+  the scrape path. The verified image versions are Prometheus 3.13.5 and
+  Grafana OSS 13.2.4. The Go client is pinned at 1.23.2.
+- `go test -race -count=1 ./internal/metrics ./cmd/api` passed, including
+  exporter authorization, privacy-safe route labels and outbox read
+  failure. The isolated outbox integration test verified pending counts
+  and attempt results against a fake bot. `go vet ./...` and
+  `actionlint` v1.7.12 passed.
+- The full backend race suite passed using the CI coverage flags.
+  Coverage was API 76.4%, auth 88.4%, moderation 100% and service 89.1%.
+- `CHECK_MONITORING=1 bash infra/check-hardening.sh` passed after fixing the
+  Windows HTTP status probe and disabling Grafana plugin preinstallation.
+  The disposable project verified the monitored backend scrape, rejection
+  of an internal API token at the scrape endpoint, edge 404 responses,
+  authenticated dashboard provisioning and a live outbox sample queried
+  through Grafana. It validated the monitoring and TLS overrides together
+  and removed the temporary project and volumes.
+- [Monitoring](OPERATIONS.md#monitoring) documents deployment and access.
+  The working stand, GitHub CI execution and live Telegram delivery
+  were outside this validation.
+
+## 2026-11-23 — P3 Telegram webhook
+
+- The optional Compose override enables a separate bot listener behind one
+  HTTPS Nginx route. It validates a dedicated secret and limits request
+  bodies to 256 KiB. The bot acknowledges updates after the handler returns
+  and remembers the last 4,096 accepted IDs in memory. The cache is local
+  to the process and updates can be repeated across restart or lost
+  acknowledgements.
+- Polling remains the default. Switching to polling removes a previous
+  webhook without dropping pending updates. Webhook shutdown drains the
+  accepted request and leaves registration in place.
+- `go test -race -count=1 ./cmd/bot ./internal/config` passed. The full bot
+  race suite with CI coverage flags and `go vet ./...` passed. Handler
+  coverage was 78.1%. Fake Telegram responses covered registration,
+  switching modes, sanitized failure, authentication, size and JSON
+  limits, replay, backpressure and graceful shutdown.
+- `CHECK_MONITORING=1 bash infra/check-hardening.sh` passed. The disposable
+  project validated the Compose overrides together, checked the TLS route
+  before and after enabling the webhook, and forwarded the credential to
+  a fake upstream. It confirmed method and private route restrictions and
+  removed its containers and volumes.
+- [Telegram webhook operations](OPERATIONS.md#telegram-webhook) documents
+  setup and rollback. The working stand, actual Telegram registration and
+  GitHub CI execution were outside this validation.
+
+## 2026-11-23 — P3 transcript export
+
+- Added role-gated CSV and PDF downloads to session details. The server
+  exports retained messages in chronological order with delivery status
+  and sender attribution. The export includes captions and omits
+  attachment files, file references, participant IDs and session titles.
+- The backend caps export rows, source text bytes, PDF pages and concurrent
+  exports. CSV protects formula-like cells and PDF embeds a Cyrillic-capable
+  font. An audit event must be recorded before returning an attachment.
+- `go test -race -count=1 ./internal/transcript ./internal/api` and the
+  isolated `TestSessionTranscriptAccessContentAndLimits` passed. They
+  covered role boundaries, session isolation, chronological ordering and
+  combined size limits. Poppler independently extracted the expected
+  Russian and English text from a generated fixture PDF. `go vet ./...`
+  passed. Swagger was regenerated for the new endpoint.
+- `npm.cmd run lint` and `npm.cmd run test:e2e` passed. The browser suite
+  passed all 14 scenarios after correcting the test navigation to preserve
+  the in-memory session. It verified both downloads and the limit message.
+- `bash infra/check-hardening.sh` built the backend and panel images and
+  passed the isolated Compose checks.
+- The full backend race suite and the existing CI coverage thresholds
+  passed. Coverage was API 76.6%, auth 88.4%, moderation 100% and service 89.1%.
+- The working stand and GitHub CI execution were outside this validation.
+
 ## Entry template
 ### YYYY-MM-DD — [ID] Short title
 - **Status:** planned / in progress / completed / blocked

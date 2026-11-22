@@ -402,17 +402,24 @@ scheduled run are separate operational checks.
 
 | ID | Task | h |
 |---|---|---|
-| P2-1 | Translate Russian comments (§I) to English; remove obsolete comments | 6 |
-| P2-2 | Remove dead code/columns usage; drop `REDIS_URL` from bot; remove committed `coverage`; rename `testuril_test.go` | 3 |
-| P2-3 | Introduce service layer (relay, sessions) and shared handler helpers | 8 |
-| P2-4 | Docker hardening: non-root users, read-only FS where possible, Redis password+volume, resource limits, healthchecks, dev compose ports bound to 127.0.0.1 | 6 |
-| P2-5 | Encryption key versioning/rotation; salted HMAC for audit hashing; hash session tokens in Redis | 8 |
-| P2-6 | DB: unique participant constraints, FK actions, indexes (`audit_log(action)`), least-privilege role vs migrator | 6 |
-| P2-7 | Graceful shutdown + server timeouts for backend; Gin trusted proxies | 4 |
-| P2-8 | Coverage gate, k6 scenario updated with auth token | 3 |
+| P2-1 | **Closed in local validation.** Translate current source comments and Swagger annotations to English and correct obsolete descriptions. Original migration text is preserved. | 6 |
+| P2-2 | **Closed in local validation.** Drop the unused bot Redis setting, legacy message-path reads and writes, unused deletion helpers and session index. Remove tracked coverage snapshots and rename the retention test helper. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-22--p2-1-and-p2-2-source-and-repository-cleanup) | 3 |
+| P2-3 | **Closed in local validation.** Extract participant relay, invitation binding and session status transitions into services, with shared session ID and participant-role helpers. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p2-3-service-layer-and-p2-8-coverage-and-k6) | 8 |
+| P2-4 | **Closed in isolated validation.** Non-root application containers, read-only roots, media ownership preparation, authenticated Redis persistence, resource limits and verified HTTP/TLS, healthchecks and loopback dev ports. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p2-4-container-hardening) | 6 |
+| P2-5 | **Closed in isolated validation.** Versioned AES-GCM and transactional PII/TOTP rotation, salted HMAC for retained audit PII, and hashed Redis session keys. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p2-5-encryption-rotation-and-credential-storage) | 8 |
+| P2-6 | **Closed in isolated validation.** Distinct participant slots, explicit FK actions, supporting indexes and separate database runtime and owner privileges. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p2-6-postgresql-integrity-and-runtime-privileges) | 6 |
+| P2-7 | **Closed in local validation.** Backend handles SIGTERM, drains HTTP and settles in-flight delivery. Existing HTTP timeouts and trusted proxy settings were reverified. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-22--p2-7-backend-shutdown) | 4 |
+| P2-8 | **Closed in isolated validation.** CI coverage gate includes the service package. Authenticated k6 relay passed with 250 queued messages across 50 synthetic sessions. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p2-3-service-layer-and-p2-8-coverage-and-k6) | 3 |
 
 ### P3 — Optional commercial enhancements (≈ 45 h)
-White-label config (names, texts, themes) 16 h · metrics endpoint + Grafana dashboard 8 h · webhook mode 6 h · CSV/PDF transcript export 8 h · SSO/OIDC for operators 7 h.
+
+| Task | Status | h |
+|---|---|---:|
+| White-label configuration | **Closed in isolated validation.** Runtime names, localized sign-in and bot greeting texts, panel accent and light/dark/auto scheme. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-white-label) | 16 |
+| Metrics endpoint and Grafana dashboard | **Closed in isolated validation.** Authenticated Prometheus scrape, HTTP and delivery signals, and a provisioned loopback Grafana dashboard. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-monitoring) | 8 |
+| Telegram webhook mode | **Closed in isolated validation.** Opt-in TLS route, dedicated secret, replay suppression, graceful drain and switch back to polling. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-telegram-webhook) | 6 |
+| CSV/PDF transcript export | **Closed in isolated validation.** Role-gated session exports, Cyrillic PDF, spreadsheet-safe CSV and required audit records. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-transcript-export) | 8 |
+| SSO/OIDC for operators | Planned | 7 |
 
 **Total ≈ 325 h** (≈ 280 h without P3).
 

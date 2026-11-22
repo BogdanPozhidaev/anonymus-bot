@@ -32,9 +32,9 @@ func insertMessage(ctx context.Context, db messageInserter, m *models.Message) e
 	query := `
 		INSERT INTO messages (
 			session_id, sender_user_id, sender_role, content_type,
-			content, file_id, internal_file_path, sent_by_operator, impersonated_role, delivered
+			content, file_id, sent_by_operator, impersonated_role, delivered
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at
 	`
 
@@ -45,7 +45,6 @@ func insertMessage(ctx context.Context, db messageInserter, m *models.Message) e
 		m.ContentType,
 		m.Content,
 		m.FileID,
-		m.InternalFilePath,
 		m.SentByOperator,
 		m.ImpersonatedRole,
 		m.Delivered,
@@ -65,10 +64,44 @@ func (r *MessageRepository) ListRecentBySessionID(ctx context.Context, sessionID
 	return r.listBySessionID(ctx, "ORDER BY m.created_at DESC, m.id DESC LIMIT $2 OFFSET $3", sessionID, limit, offset)
 }
 
+var ErrTranscriptTooLarge = errors.New("transcript exceeds export limits")
+
+func (r *MessageRepository) ListTranscript(ctx context.Context, sessionID int64, maxMessages, maxTextBytes int) ([]models.TranscriptEntry, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT m.created_at, m.sender_role, m.content_type, COALESCE(o.status, 'legacy_unknown'),
+			m.sent_by_operator, COALESCE(m.impersonated_role, ''),
+			COALESCE(CASE WHEN octet_length(m.content) <= $3 THEN m.content END, ''),
+			COALESCE(octet_length(m.content), 0)
+		FROM messages m LEFT JOIN message_outbox o ON o.message_id=m.id
+		WHERE m.session_id=$1 ORDER BY m.created_at ASC, m.id ASC LIMIT $2`,
+		sessionID, maxMessages+1, maxTextBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []models.TranscriptEntry
+	textBytes := 0
+	for rows.Next() {
+		var entry models.TranscriptEntry
+		var size int
+		if err := rows.Scan(&entry.CreatedAt, &entry.SenderRole, &entry.ContentType, &entry.DeliveryStatus,
+			&entry.SentByOperator, &entry.ImpersonatedRole, &entry.Content, &size); err != nil {
+			return nil, err
+		}
+		if len(entries) == maxMessages || size > maxTextBytes-textBytes {
+			return nil, ErrTranscriptTooLarge
+		}
+		textBytes += size
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
 func (r *MessageRepository) listBySessionID(ctx context.Context, order string, args ...any) ([]*models.Message, error) {
 	query := `
 		SELECT m.id, m.session_id, m.sender_user_id, m.sender_role, m.content_type,
-			m.content, m.file_id, m.internal_file_path, m.sent_by_operator, m.impersonated_role, m.created_at, m.delivered,
+			m.content, m.file_id, m.sent_by_operator, m.impersonated_role, m.created_at, m.delivered,
             COALESCE(o.status, 'legacy_unknown')
 		FROM messages m LEFT JOIN message_outbox o ON o.message_id=m.id
 		WHERE m.session_id = $1
@@ -91,7 +124,6 @@ func (r *MessageRepository) listBySessionID(ctx context.Context, order string, a
 			&m.ContentType,
 			&m.Content,
 			&m.FileID,
-			&m.InternalFilePath,
 			&m.SentByOperator,
 			&m.ImpersonatedRole,
 			&m.CreatedAt,
@@ -111,21 +143,11 @@ func (r *MessageRepository) listBySessionID(ctx context.Context, order string, a
 	return messages, nil
 }
 
-func (r *MessageRepository) DeleteBySessionID(ctx context.Context, sessionID int64) error {
-	query := `DELETE FROM messages WHERE session_id = $1`
-	_, err := r.pool.Exec(ctx, query, sessionID)
-	if err != nil {
-		return fmt.Errorf("failed to delete messages for session %d: %w", sessionID, err)
-	}
-	return nil
-}
-
-// ListForDeletion возвращает сообщения сессий, закрытых раньше threshold —
-// кандидаты на удаление согласно retention-политике (слой 2: сообщения/медиа).
+// ListForDeletion returns retention candidates from sessions closed before threshold.
 func (r *MessageRepository) ListForDeletion(ctx context.Context, threshold time.Time) ([]*models.Message, error) {
 	query := `
 		SELECT m.id, m.session_id, m.sender_user_id, m.sender_role, m.content_type,
-			m.content, m.file_id, m.internal_file_path, m.sent_by_operator,
+			m.content, m.file_id, m.sent_by_operator,
 			m.impersonated_role, m.delivered, m.created_at
 		FROM messages m
 		INNER JOIN sessions s ON s.id = m.session_id
@@ -150,7 +172,6 @@ func (r *MessageRepository) ListForDeletion(ctx context.Context, threshold time.
 			&m.ContentType,
 			&m.Content,
 			&m.FileID,
-			&m.InternalFilePath,
 			&m.SentByOperator,
 			&m.ImpersonatedRole,
 			&m.Delivered,
@@ -167,22 +188,6 @@ func (r *MessageRepository) ListForDeletion(ctx context.Context, threshold time.
 	}
 
 	return messages, nil
-}
-
-// DeleteByIDs необратимо удаляет записи сообщений по списку ID.
-func (r *MessageRepository) DeleteByIDs(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	query := `DELETE FROM messages WHERE id = ANY($1)`
-
-	_, err := r.pool.Exec(ctx, query, ids)
-	if err != nil {
-		return fmt.Errorf("failed to delete messages: %w", err)
-	}
-
-	return nil
 }
 
 // DeleteExpired locks the session through file and row cleanup so a concurrent
@@ -235,7 +240,7 @@ func (r *MessageRepository) DeleteExpired(ctx context.Context, message *models.M
 func (r *MessageRepository) GetByID(ctx context.Context, id int64) (*models.Message, error) {
 	query := `
 		SELECT id, session_id, sender_user_id, sender_role, content_type,
-			content, file_id, internal_file_path, sent_by_operator,
+			content, file_id, sent_by_operator,
 			impersonated_role, delivered, created_at
 		FROM messages
 		WHERE id = $1
@@ -250,7 +255,6 @@ func (r *MessageRepository) GetByID(ctx context.Context, id int64) (*models.Mess
 		&m.ContentType,
 		&m.Content,
 		&m.FileID,
-		&m.InternalFilePath,
 		&m.SentByOperator,
 		&m.ImpersonatedRole,
 		&m.Delivered,

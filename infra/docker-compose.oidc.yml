@@ -1,0 +1,17 @@
+services:
+  backend:
+    environment:
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:?Set OIDC_REDIRECT_URL}
+      OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      OIDC_OPERATOR_MAP_FILE: /run/secrets/oidc_operator_map
+    secrets:
+      - oidc_client_secret
+      - oidc_operator_map
+
+secrets:
+  oidc_client_secret:
+    file: ${OIDC_CLIENT_SECRET_FILE:?Set OIDC_CLIENT_SECRET_FILE}
+  oidc_operator_map:
+    file: ${OIDC_OPERATOR_MAP_FILE:?Set OIDC_OPERATOR_MAP_FILE}

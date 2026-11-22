@@ -3,10 +3,32 @@ x-postgres-env: &postgres-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
   POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
 
+x-postgres-runtime-env: &postgres-runtime-env
+  PGHOST: postgres
+  POSTGRES_USER: anonymus_runtime
+  POSTGRES_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?Set POSTGRES_RUNTIME_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+
+x-restricted: &restricted
+  read_only: true
+  security_opt: [no-new-privileges:true]
+
+x-encryption-env: &encryption-env
+  PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
+  PII_ENCRYPTION_KEYS: ${PII_ENCRYPTION_KEYS:-}
+  PII_ENCRYPTION_ACTIVE_VERSION: ${PII_ENCRYPTION_ACTIVE_VERSION:-1}
+
 services:
   postgres:
+    <<: *restricted
     image: postgres:15-alpine
     restart: unless-stopped
+    cpus: 2
+    mem_limit: 1g
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=32m,mode=1777,nosuid,nodev,noexec
+      - /var/run/postgresql:size=16m,mode=3775,nosuid,nodev,noexec
     environment: *postgres-env
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -19,9 +41,14 @@ services:
       retries: 5
 
   redis:
+    <<: *restricted
+    cap_drop: [ALL]
     image: redis:7-alpine
     user: redis
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 64
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
     command:
@@ -32,7 +59,9 @@ services:
           ''|*[!A-Za-z0-9_-]*) echo 'REDIS_PASSWORD must use only letters, digits, underscores and hyphens' >&2; exit 1 ;;
         esac
         if [ "$${#REDIS_PASSWORD}" -lt 32 ]; then echo 'REDIS_PASSWORD must contain at least 32 characters' >&2; exit 1; fi
-        printf 'requirepass %s\n' "$$REDIS_PASSWORD" | redis-server -
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" | redis-server - --dir /data --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data:/data
     networks:
       - internal
     healthcheck:
@@ -42,6 +71,11 @@ services:
       retries: 5
 
   migrate:
+    <<: *restricted
+    cap_drop: [ALL]
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 64
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -58,21 +92,67 @@ services:
     networks:
       - internal
 
-  backend:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
+  db-permissions:
+    <<: *restricted
+    image: postgres:15-alpine
+    user: postgres
+    entrypoint: ["/bin/sh", "/db-permissions.sh"]
+    cap_drop: [ALL]
+    cpus: 1
+    mem_limit: 64m
+    pids_limit: 32
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     environment:
       <<: *postgres-env
-      PGHOST: postgres
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?Set POSTGRES_RUNTIME_PASSWORD}
+    volumes:
+      - ./db-permissions.sh:/db-permissions.sh:ro
+      - ./db-permissions.sql:/db-permissions.sql:ro
+    networks:
+      - internal
+
+  media-init:
+    <<: *restricted
+    image: alpine:3.19
+    user: "0:0"
+    command: ["/bin/sh", "/media-permissions.sh"]
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    cpus: 1
+    mem_limit: 64m
+    pids_limit: 32
+    volumes:
+      - ./media-permissions.sh:/media-permissions.sh:ro
+      - bot_photos:/data/photos
+      - bot_voice:/data/voice
+
+  backend:
+    <<: *restricted
+    cap_drop: [ALL]
+    cpus: 2
+    mem_limit: 512m
+    pids_limit: 128
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 2m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-permissions:
+        condition: service_completed_successfully
+      media-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*postgres-runtime-env, *encryption-env]
       REDIS_URL: redis://redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
       BACKEND_PORT: "8080"
@@ -81,7 +161,6 @@ services:
       ENABLE_SWAGGER: ${ENABLE_SWAGGER:-false}
       MODERATION_DISABLED_RULES: ${MODERATION_DISABLED_RULES:-}
       MODERATION_AUTO_PAUSE: ${MODERATION_AUTO_PAUSE:-false}
-      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:?Set PII_ENCRYPTION_KEY}
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
       BOT_INTERNAL_URL: http://bot:9090
@@ -104,6 +183,13 @@ services:
       retries: 5
 
   bot:
+    <<: *restricted
+    cap_drop: [ALL]
+    cpus: 2
+    mem_limit: 768m
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev,noexec
     build:
       context: ../bot
       dockerfile: Dockerfile
@@ -114,14 +200,19 @@ services:
         condition: service_healthy
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      BOT_UPDATE_MODE: polling
       BACKEND_URL: http://backend:8080
       INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token
       BOT_INTERNAL_TOKEN_FILE: /run/secrets/bot_internal_token
-      REDIS_URL: redis://redis:6379
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
       PANEL_BASE_URL: ${PANEL_BASE_URL:-http://localhost}
       OPERATOR_GROUP_CHAT_ID: ${OPERATOR_GROUP_CHAT_ID:-}
+      BOT_ORGANIZATION_NAME: ${BOT_ORGANIZATION_NAME:-}
+      BOT_JOINED_TEXT_RU: ${BOT_JOINED_TEXT_RU:-}
+      BOT_JOINED_TEXT_EN: ${BOT_JOINED_TEXT_EN:-}
+      BOT_REQUEST_RECEIVED_TEXT_RU: ${BOT_REQUEST_RECEIVED_TEXT_RU:-}
+      BOT_REQUEST_RECEIVED_TEXT_EN: ${BOT_REQUEST_RECEIVED_TEXT_EN:-}
     secrets:
       - internal_api_token
       - bot_internal_token
@@ -139,6 +230,11 @@ services:
       retries: 3
 
   retention:
+    <<: *restricted
+    cap_drop: [ALL]
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 64
     build:
       context: ../backend
       dockerfile: Dockerfile.retention
@@ -146,12 +242,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
+      db-permissions:
+        condition: service_completed_successfully
+      media-init:
         condition: service_completed_successfully
     environment:
-      <<: *postgres-env
-      PGHOST: postgres
-      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:?Set PII_ENCRYPTION_KEY}
+      <<: [*postgres-runtime-env, *encryption-env]
       PHOTOS_DIR: /data/photos
       VOICE_DIR: /data/voice
       RETENTION_RUN_HOUR: ${RETENTION_RUN_HOUR:-03}
@@ -165,12 +261,23 @@ services:
       - internal
 
   panel:
+    <<: *restricted
+    cap_drop: [ALL]
+    cpus: 1
+    mem_limit: 128m
+    pids_limit: 32
+    tmpfs:
+      - /tmp:size=32m,mode=1777,nosuid,nodev,noexec
     build:
       context: ../webpanel
     restart: unless-stopped
     environment:
       PANEL_BOT_USERNAME: ${PANEL_BOT_USERNAME:-}
       PANEL_PRODUCT_NAME: ${PANEL_PRODUCT_NAME:-}
+      PANEL_PRIMARY_COLOR: ${PANEL_PRIMARY_COLOR:-blue}
+      PANEL_COLOR_SCHEME: ${PANEL_COLOR_SCHEME:-light}
+      PANEL_LOGIN_SUBTITLE_RU: ${PANEL_LOGIN_SUBTITLE_RU:-}
+      PANEL_LOGIN_SUBTITLE_EN: ${PANEL_LOGIN_SUBTITLE_EN:-}
     networks:
       - proxy
     healthcheck:
@@ -180,7 +287,16 @@ services:
       retries: 5
 
   nginx:
+    <<: *restricted
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, KILL, NET_BIND_SERVICE, SETGID, SETUID]
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=64m,mode=1777,nosuid,nodev,noexec
     image: nginx:1.25-alpine
+    entrypoint: ["nginx", "-g", "daemon off;"]
     restart: unless-stopped
     ports:
       - "${PANEL_HTTP_BIND:-0.0.0.0}:${PANEL_HTTP_PORT:-80}:80"
@@ -219,5 +335,6 @@ secrets:
 
 volumes:
   postgres_data:
+  redis_data:
   bot_photos:
   bot_voice:

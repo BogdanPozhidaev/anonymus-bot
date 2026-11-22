@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/fastcheck/anonymus_bot/bot/internal/backendclient"
+	"github.com/fastcheck/anonymus_bot/bot/internal/config"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -164,7 +165,7 @@ func TestHandlerCommandsAndCallbacks(t *testing.T) {
 	NewStopHandler(f.bot, f.backend, f.logger).Handle(ctx, m)
 	f.expect(t)
 	f.expect(t, "The other person asked to end the conversation.")
-	NewStartHandler(f.bot, f.backend, f.logger).Handle(ctx, m)
+	NewStartHandler(f.bot, f.backend, f.logger, config.StartBranding{}).Handle(ctx, m)
 	f.expect(t, "Спасибо")
 	NewHelpHandler(f.bot, f.logger).Handle(m)
 	f.expect(t, "/start")

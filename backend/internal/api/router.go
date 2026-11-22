@@ -12,6 +12,7 @@ import (
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
+	"github.com/fastcheck/anonymus_bot/backend/internal/service"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -29,11 +30,15 @@ type Server struct {
 	messageRepo         *repository.MessageRepository
 	auditLogRepo        *repository.AuditLogRepository
 	moderationService   *moderation.Service
+	relay               *service.Relay
+	sessionFlow         *service.Sessions
 	sessionService      *auth.SessionService
 	pendingAuthService  *auth.PendingAuthService
+	oidc                *auth.OIDCService
 	botClient           *botclient.Client
 	photosDir           string
 	voiceDir            string
+	transcriptSlots     chan struct{}
 }
 
 func NewServer(
@@ -64,11 +69,14 @@ func NewServer(
 		messageRepo:         messageRepo,
 		auditLogRepo:        auditLogRepo,
 		moderationService:   moderationService,
+		relay:               service.NewRelay(userRepo, sessionRepo, messageRepo, moderationService, logger),
+		sessionFlow:         service.NewSessions(sessionRepo, userRepo, moderationService),
 		sessionService:      sessionService,
 		pendingAuthService:  pendingAuthService,
 		botClient:           botClient,
 		photosDir:           photosDir,
 		voiceDir:            voiceDir,
+		transcriptSlots:     make(chan struct{}, 4),
 	}
 }
 
@@ -103,12 +111,18 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 
 	apiGroup := r.Group("/api", limitRequestBody)
 	{
-		// Публичные эндпоинты аутентификации — без requireAuth
+		// Public authentication endpoints.
 		apiGroup.POST("/auth/login", s.handleLogin)
+		apiGroup.GET("/auth/oidc", s.handleOIDCStatus)
+		if s.oidc != nil {
+			apiGroup.POST("/auth/oidc/start", s.handleOIDCStart)
+			apiGroup.GET("/auth/oidc/callback", s.handleOIDCCallback)
+			apiGroup.POST("/auth/oidc/complete", s.handleOIDCComplete)
+		}
 		apiGroup.POST("/auth/totp/verify", s.handleVerifyTOTP)
 		apiGroup.POST("/auth/totp/recover", s.handleRecoverTOTP)
 
-		// Всё остальное в /api требует валидной сессии
+		// All other operator API routes require an authenticated session.
 		credentials := apiGroup.Group("", s.requireAuth(true))
 		credentials.POST("/auth/logout", s.handleLogout)
 		credentials.POST("/auth/password", s.handleChangePassword)
@@ -127,6 +141,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 			authenticated.PATCH("/sessions/:id/status", s.handleUpdateSessionStatus)
 			authenticated.PATCH("/sessions/:id/owner", s.handleAssignSessionOwner)
 			authenticated.GET("/sessions/:id/messages", s.handleListSessionMessages)
+			authenticated.GET("/sessions/:id/transcript", s.handleExportTranscript)
 			authenticated.GET("/incoming-requests", s.handleListIncomingRequests)
 			authenticated.PATCH("/incoming-requests/:id/status", s.handleUpdateIncomingRequestStatus)
 			authenticated.POST("/sessions/:id/send-as", s.handleSendMessageAsOperator)

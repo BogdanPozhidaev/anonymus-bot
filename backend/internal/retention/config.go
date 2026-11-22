@@ -8,12 +8,10 @@ import (
 )
 
 type Config struct {
-	// PIIRetentionPeriod — через сколько времени после закрытия сессии
-	// анонимизируются PII участников (username, first_name, telegram_id).
+	// PIIRetentionPeriod is the minimum time after session closure before anonymization.
 	PIIRetentionPeriod time.Duration
 
-	// MessageRetentionPeriod — через сколько времени после закрытия сессии
-	// удаляются сообщения и медиафайлы.
+	// MessageRetentionPeriod is the minimum time after closure before deleting messages and media.
 	MessageRetentionPeriod time.Duration
 }
 
@@ -31,10 +29,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadConfig читает периоды retention из переменных окружения
-// RETENTION_PII_MONTHS и RETENTION_MESSAGE_MONTHS. Если переменная
-// не задана или не парсится как положительное целое число месяцев,
-// используется значение по умолчанию (см. DefaultConfig).
+// LoadConfig reads the retention periods from RETENTION_PII_MONTHS and
+// RETENTION_MESSAGE_MONTHS. Unset values use the defaults and invalid values fail.
 func LoadConfig() (Config, error) {
 	cfg := DefaultConfig()
 
