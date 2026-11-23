@@ -46,11 +46,13 @@ const test = base.extend<{
   operatorRole: OperatorRole;
   dashboardState: 'normal' | 'empty' | 'request-error';
   transcriptTooLarge: boolean;
+  oidcAvailable: boolean;
 }>({
   operatorRole: ['operator', { option: true }],
   dashboardState: ['normal', { option: true }],
   transcriptTooLarge: [false, { option: true }],
-  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState, transcriptTooLarge }, useFixture) => {
+  oidcAvailable: [false, { option: true }],
+  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState, transcriptTooLarge, oidcAvailable }, useFixture) => {
     const session: SessionListItem = {
       id: 42, title: 'Fixture session', status: 'active', owner_operator_id: 7,
       client_user_id: null, executor_user_id: null, created_at: fixture.timestamp,
@@ -61,6 +63,7 @@ const test = base.extend<{
       { id: 8, name: 'Fixture target', login: 'fixture-target', role: 'admin', status: 'active', email: null, created_at: fixture.timestamp, last_login_at: null },
     ];
     const unexpected: string[] = [];
+    let oidcCompleted = false;
 
     await page.route('**/*', async route => {
       const request = route.request();
@@ -72,12 +75,25 @@ const test = base.extend<{
       if (pathname === '/panel-config.json') {
         return route.fulfill({ json: { botUsername: 'fixture_bot' } });
       }
+      if (oidcAvailable && pathname === '/provider-fixture') {
+        return route.fulfill({ status: 303, headers: { location: '/login?oidc=complete' } });
+      }
       if (!pathname.startsWith('/api/')) {
         return route.continue();
       }
 
       const key = `${request.method()} ${pathname}`;
       const body = request.postData() ? request.postDataJSON() : undefined;
+      if (key === 'GET /api/auth/oidc') {
+        return route.fulfill({ json: { enabled: oidcAvailable } });
+      }
+      if (oidcAvailable && key === 'POST /api/auth/oidc/start') {
+        return route.fulfill({ json: { authorization_url: `${baseURL}/provider-fixture` } });
+      }
+      if (oidcAvailable && key === 'POST /api/auth/oidc/complete' && !oidcCompleted) {
+        oidcCompleted = true;
+        return route.fulfill({ json: { status: 'totp_required', pending_token: fixture.pendingToken } });
+      }
       if (key === 'POST /api/auth/login') {
         if (body?.login !== fixture.login || body?.password !== fixture.password) return route.fulfill({ status: 401 });
         return route.fulfill({ json: { status: 'totp_required', pending_token: fixture.pendingToken } });
@@ -178,19 +194,49 @@ type Labels = typeof panelLabels.ru;
 async function enterCredentials(page: Page, labels = panelLabels.ru) {
   await page.getByLabel(labels.login).fill(fixture.login);
   await page.getByLabel(labels.password).and(page.locator('input[type=password]')).fill(fixture.password);
-  await page.getByRole('button', { name: labels.signIn }).click();
+  await page.getByRole('button', { name: labels.signIn, exact: true }).click();
   await expect(page.getByRole('textbox', { name: labels.code, exact: true })).toBeVisible();
 }
 
 async function enterTOTP(page: Page, labels = panelLabels.ru, code = fixture.totp) {
   await page.getByRole('textbox', { name: labels.code, exact: true }).fill(code);
-  await page.getByRole('button', { name: labels.signIn }).click();
+  await page.getByRole('button', { name: labels.signIn, exact: true }).click();
 }
 
 async function openSession(page: Page, labels: Labels) {
   await page.getByRole('row').filter({ hasText: 'Fixture session' }).getByRole('button', { name: labels.openSession }).click();
   await expect(page.getByRole('heading', { name: 'Fixture session' })).toBeVisible();
 }
+
+test('local login hides SSO when the backend disables it', async ({ page }) => {
+  const status = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/oidc');
+  await page.goto('/login');
+  await status;
+  await expect(page.getByRole('button', { name: 'Войти через SSO' })).toHaveCount(0);
+  await enterCredentials(page);
+});
+
+test.describe('optional SSO', () => {
+  test.use({ oidcAvailable: true });
+
+  test('returns from the provider and requires a second factor', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByRole('button', { name: 'Войти через SSO' }).click();
+    await expect(page.getByRole('textbox', { name: panelLabels.ru.code, exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/login$/);
+    await enterTOTP(page);
+    await expect(page).toHaveURL(/\/dashboard$/);
+  });
+
+  test('shows a failed callback and leaves password sign-in available', async ({ page }) => {
+    await page.goto('/login?oidc=failed');
+    await expect(page.getByText('Вход через SSO не завершён. Попробуйте снова или войдите по паролю.')).toBeVisible();
+    await expect(page).toHaveURL(/\/login$/);
+    await enterCredentials(page);
+    await enterTOTP(page);
+    await expect(page).toHaveURL(/\/dashboard$/);
+  });
+});
 
 for (const [language, labels] of Object.entries(panelLabels)) {
   test(`operator can preview delivered media and reply after the client joins (${language})`, async ({ page, sessionFixture }) => {
@@ -269,7 +315,7 @@ test.describe('oversized transcript', () => {
   });
 });
 
-base('runtime branding applies the title, scheme, accent, and localized sign-in text', async ({ page }) => {
+test('runtime branding applies the title, scheme, accent, and localized sign-in text', async ({ page }) => {
   const product = 'North & Co «Панель»';
   const ru = 'Вход сотрудников <North & Co>';
   const en = 'Sign in to North & Co';
@@ -293,7 +339,7 @@ base('runtime branding applies the title, scheme, accent, and localized sign-in 
   await expect(page.getByText(ru, { exact: true })).toHaveCount(0);
 });
 
-base('invalid optional runtime branding falls back to panel defaults', async ({ page }) => {
+test('invalid optional runtime branding falls back to panel defaults', async ({ page }) => {
   await page.route('**/panel-config.json', route => route.fulfill({ json: {
     productNameBase64: '!', primaryColor: 'unsupported', colorScheme: 'unsupported',
     loginSubtitleRuBase64: Buffer.from([0xff]).toString('base64'),
@@ -310,7 +356,7 @@ base('invalid optional runtime branding falls back to panel defaults', async ({ 
   await expect(page.getByText('�')).toHaveCount(0);
 });
 
-base('automatic color scheme follows the browser', async ({ page }) => {
+test('automatic color scheme follows the browser', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.route('**/panel-config.json', route => route.fulfill({ json: { colorScheme: 'auto' } }));
   await page.goto('/login');

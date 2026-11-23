@@ -419,7 +419,7 @@ scheduled run are separate operational checks.
 | Metrics endpoint and Grafana dashboard | **Closed in isolated validation.** Authenticated Prometheus scrape, HTTP and delivery signals, and a provisioned loopback Grafana dashboard. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-monitoring) | 8 |
 | Telegram webhook mode | **Closed in isolated validation.** Opt-in TLS route, dedicated secret, replay suppression, graceful drain and switch back to polling. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-telegram-webhook) | 6 |
 | CSV/PDF transcript export | **Closed in isolated validation.** Role-gated session exports, Cyrillic PDF, spreadsheet-safe CSV and required audit records. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-transcript-export) | 8 |
-| SSO/OIDC for operators | Planned | 7 |
+| SSO/OIDC for operators | **Closed in isolated validation.** Opt-in HTTPS login with PKCE, explicit operator binding, a one-time handoff and the existing local second factor. [Verification](docs/DEVELOPMENT_LOG.md#2026-11-23--p3-operator-sso) | 7 |
 
 **Total ≈ 325 h** (≈ 280 h without P3).
 

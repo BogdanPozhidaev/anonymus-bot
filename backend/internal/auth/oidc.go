@@ -19,31 +19,31 @@ import (
 )
 
 const (
-	OIDCStateTTL = 5 * time.Minute
+	OIDCStateTTL  = 5 * time.Minute
 	OIDCTicketTTL = time.Minute
 )
 
 var ErrOIDCAuthentication = errors.New("OIDC authentication failed")
 
 type OIDCService struct {
-	settings config.OIDC
-	client *http.Client
-	redis *redis.Client
+	settings  config.OIDC
+	client    *http.Client
+	redis     *redis.Client
 	discovery sync.Mutex
-	oauth *oauth2.Config
-	verifier *oidc.IDTokenVerifier
-	bindings map[int64]string
+	oauth     *oauth2.Config
+	verifier  *oidc.IDTokenVerifier
+	bindings  map[int64]string
 }
 
 type oidcAttempt struct {
 	Verifier string
-	Nonce string
+	Nonce    string
 }
 
 type OIDCTicket struct {
-	OperatorID int64
+	OperatorID  int64
 	AuthVersion int64
-	Binding string
+	Binding     string
 }
 
 func NewOIDC(settings config.OIDC, client *http.Client, store *redis.Client) *OIDCService {
@@ -65,7 +65,7 @@ func (o *OIDCService) provider(ctx context.Context) (*oauth2.Config, *oidc.IDTok
 		return nil, nil, ErrOIDCAuthentication
 	}
 	var metadata struct {
-		Keys string `json:"jwks_uri"`
+		Keys        string   `json:"jwks_uri"`
 		PKCEMethods []string `json:"code_challenge_methods_supported"`
 	}
 	endpoint := provider.Endpoint()
@@ -119,10 +119,13 @@ func (o *OIDCService) Verify(ctx context.Context, state, browser, code string) (
 		return 0, ErrOIDCAuthentication
 	}
 	token, err := verifier.Verify(ctx, raw)
-	if err != nil || token.Subject == "" || subtle.ConstantTimeCompare([]byte(token.Nonce), []byte(attempt.Nonce)) != 1 {
+	if err != nil || token.Issuer != o.settings.Issuer || token.Subject == "" ||
+		subtle.ConstantTimeCompare([]byte(token.Nonce), []byte(attempt.Nonce)) != 1 {
 		return 0, ErrOIDCAuthentication
 	}
-	var claims struct { AuthorizedParty string `json:"azp"` }
+	var claims struct {
+		AuthorizedParty string `json:"azp"`
+	}
 	if token.Claims(&claims) != nil ||
 		((len(token.Audience) > 1 || claims.AuthorizedParty != "") && claims.AuthorizedParty != o.settings.ClientID) {
 		return 0, ErrOIDCAuthentication

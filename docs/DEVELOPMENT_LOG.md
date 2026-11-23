@@ -735,6 +735,39 @@ Use this file as an append-only record of verified work. Add date, task/issue ID
   passed. Coverage was API 76.6%, auth 88.4%, moderation 100% and service 89.1%.
 - The working stand and GitHub CI execution were outside this validation.
 
+## 2026-11-23 — P3 operator SSO
+
+- Added opt-in OpenID Connect sign-in in the backend and panel, an
+  OIDC Compose override with two backend-only secrets, and a TLS
+  callback route. The browser shows the SSO action when the backend
+  reports it enabled.
+- The backend uses Authorization Code with PKCE S256, a browser-bound
+  state, a nonce and a short-lived Redis handoff. It verifies the signed
+  ID token and maps its subject to an existing operator. The operator's
+  current local role, account status and second factor still apply.
+- `go test -race -count=1 ./internal/config ./tests/repository -run '^(TestLoadOIDC|TestOIDCWithSignedProviderAndLocalTOTP)$'`
+  passed with a signed HTTPS provider fixture and temporary PostgreSQL and
+  Redis. It covered invalid settings and claims, one-use handoff, account
+  restrictions, auth-version changes and successful local second factor.
+  `go vet ./...` passed.
+- The full backend run passed with `go test ./... -race -count=1 -p 2`,
+  using the CI coverage package list and the coverage gate. Statement
+  coverage was API 77.0%, auth 86.2%, moderation 100% and service 89.1%.
+- `npm.cmd run lint`, `npm.cmd run typecheck` and `npm.cmd run test:e2e`
+  passed. All 17 browser scenarios passed, including provider return,
+  required TOTP, and password sign-in when SSO is disabled or fails.
+- `bash -n infra/check-hardening.sh` and `bash infra/check-hardening.sh`
+  passed. The isolated stack validated base and merged Compose
+  configuration, built the images, ran `nginx -t`, loaded both synthetic
+  OIDC files and confirmed callback query values were absent from the
+  edge and backend logs. The test removed its containers and volumes.
+- The same smoke test passed with `CHECK_MONITORING=1`, as used by the
+  infrastructure CI job.
+- The [SSO operations guide](OPERATIONS.md#operator-sso-with-openid-connect)
+  covers enabling SSO, rotating credentials and revoking access. GitHub CI
+  and sign-in through the deployment's real IdP remain unverified. This
+  work used synthetic data and isolated services.
+
 ## Entry template
 ### YYYY-MM-DD — [ID] Short title
 - **Status:** planned / in progress / completed / blocked

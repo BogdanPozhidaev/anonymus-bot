@@ -13,7 +13,7 @@ const OIDCCallbackPath = "/api/auth/oidc/callback"
 
 type OIDC struct {
 	Issuer, ClientID, ClientSecret, RedirectURL string
-	Operators map[string]int64
+	Operators                                   map[string]int64
 }
 
 func httpsURL(value string) (*url.URL, bool) {
@@ -48,8 +48,8 @@ func loadOIDC() (*OIDC, error) {
 		return nil, errors.New("cannot read OIDC_OPERATOR_MAP_FILE")
 	}
 	var links []struct {
-		Subject string `json:"subject"`
-		OperatorID int64 `json:"operator_id"`
+		Subject    string `json:"subject"`
+		OperatorID int64  `json:"operator_id"`
 	}
 	if len(data) > 1<<20 || json.Unmarshal(data, &links) != nil || len(links) == 0 {
 		return nil, errors.New("OIDC_OPERATOR_MAP_FILE must contain a JSON array of subject and operator_id mappings")

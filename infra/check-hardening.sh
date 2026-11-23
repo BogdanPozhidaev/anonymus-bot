@@ -34,6 +34,7 @@ cleanup() {
   rm -f -- "$fixture/fixture.env" "$fixture/backend-token" "$fixture/bot-token" \
     "$fixture/metrics-token" "$fixture/grafana-password" "$fixture/certs/privkey.pem" "$fixture/certs/fullchain.pem"
   rm -f -- "$fixture/webhook-token" "$fixture/webhook-fixture.conf"
+  rm -f -- "$fixture/oidc-secret" "$fixture/oidc-operators.json"
   if [[ -d $fixture/certs ]]; then rmdir -- "$fixture/certs"; fi
   rmdir -- "$fixture"
 }
@@ -44,7 +45,10 @@ printf '%064d' 1 > "$fixture/bot-token"
 printf '%064d' 2 > "$fixture/metrics-token"
 printf '%064d' 3 > "$fixture/webhook-token"
 printf '%s' 'isolated-grafana-fixture-password' > "$fixture/grafana-password"
+printf '%s' 'isolated-oidc-fixture-secret' > "$fixture/oidc-secret"
+printf '%s\n' '[{"subject":"fixture-operator","operator_id":1}]' > "$fixture/oidc-operators.json"
 chmod 0444 "$fixture/backend-token" "$fixture/bot-token" "$fixture/metrics-token" "$fixture/grafana-password" "$fixture/webhook-token"
+chmod 0444 "$fixture/oidc-secret" "$fixture/oidc-operators.json"
 mkdir "$fixture/certs"
 openssl req -x509 -nodes -newkey rsa:2048 -days 1 -subj /CN=localhost \
   -addext subjectAltName=DNS:localhost \
@@ -66,6 +70,11 @@ GRAFANA_ADMIN_PASSWORD_FILE=$host_fixture/grafana-password
 GRAFANA_PORT=${HARDENING_GRAFANA_PORT:-13000}
 TELEGRAM_WEBHOOK_URL=https://fixture.example.invalid/telegram/webhook
 TELEGRAM_WEBHOOK_SECRET_FILE=$host_fixture/webhook-token
+OIDC_ISSUER_URL=https://identity.example.invalid
+OIDC_CLIENT_ID=fixture-panel
+OIDC_REDIRECT_URL=https://localhost:${HARDENING_HTTPS_PORT:-18443}/api/auth/oidc/callback
+OIDC_CLIENT_SECRET_FILE=$host_fixture/oidc-secret
+OIDC_OPERATOR_MAP_FILE=$host_fixture/oidc-operators.json
 PANEL_BOT_USERNAME=fixture_bot
 PANEL_PRODUCT_NAME=Fixture Panel
 PANEL_PRIMARY_COLOR=teal
@@ -289,4 +298,18 @@ test "$(http_status "${tls_args[@]}" "$webhook_url")" = 405
 test "$(http_status "${tls_args[@]}" -X POST "$webhook_url/extra")" = 404
 test "$(http_status "${tls_args[@]}" -X POST "${webhook_url%/telegram/webhook}/internal/send-alert")" = 404
 echo 'Telegram webhook TLS edge check passed with a fake upstream'
+
+oidc_url="${webhook_url%/telegram/webhook}/api/auth/oidc"
+test "$(curl --noproxy '*' -fsS "${tls_args[@]}" "$oidc_url")" = '{"enabled":false}'
+cleanup_compose+=(-f docker-compose.oidc.yml)
+"${cleanup_compose[@]}" config --quiet
+"${cleanup_compose[@]}" up -d --wait --wait-timeout 60 nginx
+test "$(curl --noproxy '*' -fsS "${tls_args[@]}" "$oidc_url")" = '{"enabled":true}'
+test "$(http_status "${tls_args[@]}" "$oidc_url/callback?code=isolated-oidc-log-probe&state=isolated-oidc-state")" = 303
+edge_logs=$("${cleanup_compose[@]}" logs --no-color backend nginx)
+if [[ $edge_logs == *isolated-oidc-log-probe* || $edge_logs == *isolated-oidc-state* || $edge_logs == *isolated-oidc-fixture-secret* ]]; then
+  echo 'OIDC credentials appeared in the edge or backend log' >&2
+  exit 1
+fi
+echo 'OIDC TLS edge, Compose secrets and callback log checks passed'
 echo "Container hardening smoke test passed"

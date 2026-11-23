@@ -174,6 +174,52 @@ validation, run `CHECK_MONITORING=1 bash infra/check-hardening.sh` from
 the repository root to provision a disposable stand and verify scraping,
 dashboard access and the monitoring network boundaries.
 
+## Operator SSO with OpenID Connect
+
+The default sign-in uses a local password and the existing second factor.
+The optional SSO override replaces the password step for explicitly linked
+operators. They still need an active account, a completed local password
+setup and enrolled TOTP. The panel takes roles and permissions from the
+local account.
+
+1. Configure HTTPS for the panel using the [deployment guide](DEPLOYMENT.md).
+   Register a confidential OpenID Connect web client for Authorization Code
+   with PKCE S256. Register the exact callback URL, for example
+   `https://panel.example.invalid/api/auth/oidc/callback`. The backend must
+   trust the HTTPS certificates for the issuer and its discovery endpoints.
+   [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)
+2. Set the five OIDC variables from the [environment reference](ENV_VARS.md).
+   Store the client secret and operator map in separate files outside Git.
+   Limit read access to deployment administrators and backend UID 10001.
+   Obtain each stable `sub` for this exact issuer and client from the IdP's
+   administrative interface. Map it to the existing local operator ID.
+   Use a separate entry per operator.
+
+   ```json
+   [{"subject":"example-provider-subject","operator_id":42}]
+   ```
+
+3. From `infra`, validate the merged configuration and recreate the backend
+   behind the TLS edge. Keep every override already used by the deployment.
+
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.tls.yml -f docker-compose.oidc.yml config --quiet
+   docker compose -f docker-compose.yml -f docker-compose.tls.yml -f docker-compose.oidc.yml up -d --build --wait nginx
+   ```
+
+4. Confirm that `GET /api/auth/oidc` returns `{"enabled":true}`. Check SSO
+   through the browser with a linked operator and confirm the local TOTP
+   challenge, role and password fallback. The capability endpoint reports
+   configuration. The first SSO attempt contacts the provider.
+
+For secret, issuer or map changes, recreate the backend with the updated
+settings. Removing a link stops subsequent SSO after the update. For
+immediate access removal, disable the local operator to invalidate existing
+sessions and pending challenges. Panel logout revokes the local session.
+The IdP may retain its own login. To turn off SSO, recreate the backend
+without the OIDC override, keeping TLS and the other active overrides, and
+verify that the capability endpoint returns `{"enabled":false}`.
+
 ## Telegram webhook
 
 The default mode is long polling. Webhook mode uses the same bot handlers

@@ -190,7 +190,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	if cfg.OIDC != nil {
 		server.EnableOIDC(auth.NewOIDC(*cfg.OIDC, &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}, redisClient))
 	}

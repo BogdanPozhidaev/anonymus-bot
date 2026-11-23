@@ -130,6 +130,23 @@ These values apply when adding `infra/docker-compose.monitoring.yml`.
 Keep both files outside the repository and grant access to the relevant
 container users. See [Monitoring](OPERATIONS.md#monitoring).
 
+### Optional operator SSO
+
+Use `docker-compose.oidc.yml` with the TLS deployment. An empty
+`OIDC_ISSUER_URL` disables SSO in a standalone backend. With the OIDC
+override, all five settings are required.
+
+| Variable | Value |
+|---|---|
+| `OIDC_ISSUER_URL` | Exact HTTPS issuer from the provider's discovery document. |
+| `OIDC_CLIENT_ID` | Confidential web client registered at that issuer. |
+| `OIDC_REDIRECT_URL` | Public panel origin over HTTPS followed by `/api/auth/oidc/callback`. |
+| `OIDC_CLIENT_SECRET_FILE` | Absolute host path to the client secret file. |
+| `OIDC_OPERATOR_MAP_FILE` | Absolute host path to a JSON array of unique `subject` and `operator_id` pairs. |
+
+See [operator SSO operations](OPERATIONS.md#operator-sso-with-openid-connect)
+for setup, file permissions and revocation.
+
 ### Optional Telegram webhook
 
 The base Compose file uses polling. Add `docker-compose.webhook.yml`

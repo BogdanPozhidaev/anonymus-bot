@@ -57,13 +57,14 @@ func (s *Server) handleOIDCCallback(c *gin.Context) {
 	c.Header("Referrer-Policy", "no-referrer")
 	failed := func() { c.Redirect(http.StatusSeeOther, "/login?oidc=failed") }
 	browser, err := c.Cookie(oidcBrowserCookie)
-	if err != nil || c.Query("error") != "" {
+	query := c.Request.URL.Query()
+	if err != nil || query.Has("error") || len(query["state"]) != 1 || len(query["code"]) != 1 {
 		failed()
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	id, err := s.oidc.Verify(ctx, c.Query("state"), browser, c.Query("code"))
+	id, err := s.oidc.Verify(ctx, query.Get("state"), browser, query.Get("code"))
 	if err != nil {
 		failed()
 		return

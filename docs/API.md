@@ -6,8 +6,8 @@ Backend предоставляет два семейства эндпоинто�
   заголовок `X-Internal-Token`. Отсутствующий, повторный или неверный заголовок
   даёт `401` до вызова обработчика. Настройка файла токена описана в
   [ENV_VARS.md](ENV_VARS.md).
-- `/api/*` — публичный API для веб-панели, требует авторизации
-  (Bearer-токен сессии), кроме `/api/auth/login` и `/api/auth/totp/verify`
+- `/api/*` — API веб-панели. Защищённые маршруты принимают Bearer-токен
+  сессии. Точки входа, проверки готовности и восстановления описаны ниже.
 
 Базовый Compose не публикует порт бэкенда. Nginx не проксирует
 `/api/internal` и его подмаршруты. Dev override публикует порт бэкенда
@@ -33,6 +33,21 @@ Backend предоставляет два семейства эндпоинто�
 одинаковый `401` на этапе ввода пароля.
 После изменения роли или статуса прежние сессии и промежуточные токены
 оператора перестают действовать. Повторное включение оператора их не восстанавливает.
+
+### Optional operator sign-in with OpenID Connect
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/api/auth/oidc` | `{"enabled":true}` or `{"enabled":false}` according to backend configuration. |
+| POST | `/api/auth/oidc/start` | Provider `authorization_url` and a short-lived browser cookie. |
+| GET | `/api/auth/oidc/callback` | Verifies the provider response and redirects to the panel login with a completion flag. |
+| POST | `/api/auth/oidc/complete` | Consumes the one-time handoff cookie and returns `totp_required` with a `pending_token`. |
+
+The start, callback and complete routes are registered when SSO is enabled.
+The browser uses HTTPS on a single panel origin. Complete returns `401`
+for an invalid, expired or already consumed handoff. Finish the second
+factor with the existing TOTP endpoints.
+[Operator SSO operations](OPERATIONS.md#operator-sso-with-openid-connect)
 
 ## Готовность сервиса
 
