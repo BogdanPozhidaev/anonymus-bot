@@ -267,7 +267,7 @@ test('request link returns after sign-in and creates its linked session', async 
   await expect(page.getByRole('status').filter({ hasText: 'Обращение взято в работу' })).toBeVisible();
   await page.getByRole('button', { name: 'Создать сессию' }).click();
   await expect(page).toHaveURL(new RegExp(`/sessions/${sessionFixture.id}$`));
-  await page.getByRole('link', { name: 'Входящие обращения', exact: true }).click();
+  await page.getByRole('navigation').getByRole('link', { name: 'Входящие обращения', exact: true }).click();
   await page.getByRole('button', { name: 'Мои', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Открыть сессию', exact: true }))
     .toHaveAttribute('href', `/sessions/${sessionFixture.id}`);
