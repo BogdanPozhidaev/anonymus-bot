@@ -130,7 +130,7 @@ func TestSessionAlertsLinkDirectlyToHTTPSPanel(t *testing.T) {
 		handler := New(sender, 2, nil, token, "", "", fixture.base).handler()
 		req := httptest.NewRequest(http.MethodPost, "/internal/send-alert", strings.NewReader(`{
 			"text":"fixture",
-			"buttons":[{"label":"Open","callback_data":"open_session:42"},{"label":"Close","callback_data":"close_session:42"},{"label":"Take","callback_data":"take_request:42"}]
+			"buttons":[{"label":"Open","callback_data":"open_session:42"},{"label":"Close","callback_data":"close_session:42"},{"label":"Take","callback_data":"take_request:42"},{"label":"Request","callback_data":"open_request:42"}]
 		}`))
 		req.Header.Set("X-Internal-Token", token)
 		res := httptest.NewRecorder()
@@ -140,9 +140,13 @@ func TestSessionAlertsLinkDirectlyToHTTPSPanel(t *testing.T) {
 		}
 		message := sender.messages[0].(tgbotapi.MessageConfig)
 		row := message.ReplyMarkup.(tgbotapi.InlineKeyboardMarkup).InlineKeyboard[0]
-		for i, callback := range []string{"open_session:42", "close_session:42", "take_request:42"} {
-			if i < 2 && fixture.url != "" {
-				if row[i].URL == nil || *row[i].URL != fixture.url || row[i].CallbackData != nil {
+		for i, callback := range []string{"open_session:42", "close_session:42", "take_request:42", "open_request:42"} {
+			if i != 2 && fixture.url != "" {
+				wantURL := fixture.url
+				if i == 3 {
+					wantURL = fixture.base + "/incoming-requests/42"
+				}
+				if row[i].URL == nil || *row[i].URL != wantURL || row[i].CallbackData != nil {
 					t.Fatalf("button %d did not link to the configured panel", i)
 				}
 			} else if row[i].URL != nil || row[i].CallbackData == nil || *row[i].CallbackData != callback {

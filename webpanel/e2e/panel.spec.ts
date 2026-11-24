@@ -1,7 +1,7 @@
 import { expect, test as base } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import type { Message, OperatorListItem, OperatorRole, SessionListItem } from '../src/types/api.js';
+import type { IncomingRequest, Message, OperatorListItem, OperatorRole, SessionListItem } from '../src/types/api.js';
 
 const fixture = {
   login: 'fixture-operator',
@@ -47,16 +47,23 @@ const test = base.extend<{
   dashboardState: 'normal' | 'empty' | 'request-error';
   transcriptTooLarge: boolean;
   oidcAvailable: boolean;
+  multipleSessions: boolean;
+  lostSessionResponse: boolean;
 }>({
   operatorRole: ['operator', { option: true }],
   dashboardState: ['normal', { option: true }],
   transcriptTooLarge: [false, { option: true }],
   oidcAvailable: [false, { option: true }],
-  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState, transcriptTooLarge, oidcAvailable }, useFixture) => {
+  multipleSessions: [false, { option: true }],
+  lostSessionResponse: [false, { option: true }],
+  sessionFixture: [async ({ page, baseURL, operatorRole, dashboardState, transcriptTooLarge, oidcAvailable, multipleSessions, lostSessionResponse }, useFixture) => {
     const session: SessionListItem = {
       id: 42, title: 'Fixture session', status: 'active', owner_operator_id: 7,
       client_user_id: null, executor_user_id: null, created_at: fixture.timestamp,
     };
+    const secondSession: SessionListItem = { ...session, id: 43, title: 'Second fixture session', client_user_id: 22 };
+    if (multipleSessions) session.client_user_id = 12;
+    let retryKey: string | undefined;
     const messages = [message(1, 'text', 'Fixture history'), message(2, 'photo', null), message(3, 'voice', null)];
     const operators: OperatorListItem[] = [
       { id: 7, name: 'Fixture admin', login: 'fixture-admin', role: 'admin', status: 'active', email: null, created_at: fixture.timestamp, last_login_at: null },
@@ -64,6 +71,11 @@ const test = base.extend<{
     ];
     const unexpected: string[] = [];
     let oidcCompleted = false;
+    const incoming: IncomingRequest = {
+      id: 11, telegram_id: 9001, first_name: 'Fixture request', username: null,
+      first_message_text: null, language_code: 'ru', status: 'new', created_at: fixture.timestamp,
+      owner_operator_id: null, session_id: null,
+    };
 
     await page.route('**/*', async route => {
       const request = route.request();
@@ -111,13 +123,35 @@ const test = base.extend<{
         case 'POST /api/auth/logout':
           return route.fulfill({ json: { status: 'ok' } });
         case 'GET /api/sessions':
-          return route.fulfill({ json: { sessions: dashboardState === 'empty' ? [] : [session], has_more: false } });
+          return route.fulfill({ json: { sessions: dashboardState === 'empty' ? [] : multipleSessions ? [session, secondSession] : [session], has_more: false } });
         case 'GET /api/incoming-requests': {
-          if (searchParams.get('status') !== 'new') unexpected.push('dashboard requested the wrong queue');
+          if (!['new', 'in_progress', 'processed'].includes(searchParams.get('status') ?? '')) unexpected.push('invalid queue status');
           if (dashboardState === 'request-error') return route.fulfill({ status: 503 });
-          const requests = dashboardState === 'empty' ? [] : [{ id: 11, first_name: 'Fixture request', created_at: fixture.timestamp }];
+          const requests = dashboardState === 'empty' || searchParams.get('status') !== incoming.status ? [] : [incoming];
           return route.fulfill({ json: { requests, has_more: false } });
         }
+        case 'GET /api/incoming-requests/11':
+          return route.fulfill({ json: incoming });
+        case 'POST /api/incoming-requests/11/claim':
+          incoming.status = 'in_progress';
+          incoming.owner_operator_id = 7;
+          return route.fulfill({ status: 204 });
+        case 'POST /api/incoming-requests/11/session':
+          if (incoming.status !== 'in_progress' || !body?.title) {
+            unexpected.push('invalid linked session request');
+            return route.fulfill({ status: 409 });
+          }
+          incoming.session_id = session.id;
+          if (lostSessionResponse) return route.abort('timedout');
+          return route.fulfill({ status: 201, json: { id: session.id } });
+        case 'POST /api/incoming-requests/11/transfer':
+          if (operatorRole !== 'admin' || body?.expected_owner_id !== incoming.owner_operator_id || body?.operator_id !== 8) {
+            unexpected.push('invalid transfer request');
+            return route.fulfill({ status: 403 });
+          }
+          incoming.owner_operator_id = 8;
+          session.owner_operator_id = 8;
+          return route.fulfill({ status: 204 });
         case 'GET /api/operators':
           if (operatorRole !== 'admin') unexpected.push('operator requested administrative data');
           return route.fulfill({ json: { operators, has_more: false } });
@@ -138,6 +172,23 @@ const test = base.extend<{
           return route.fulfill({ json: session });
         case 'GET /api/sessions/42/messages':
           return route.fulfill({ json: { messages, has_more: false } });
+        case 'GET /api/sessions/43':
+          return route.fulfill({ json: secondSession });
+        case 'GET /api/sessions/43/messages':
+          return route.fulfill({ json: { messages: [], has_more: false } });
+        case 'POST /api/sessions/43/send-as':
+          if (body?.recipient_role !== 'client' || body?.recipient_user_id !== 22 ||
+              body?.impersonated_role !== 'executor' || body?.content !== 'Second card reply' ||
+              !/^[a-f0-9-]{36}$/.test(body?.request_key ?? '')) {
+            unexpected.push('reply lost the explicit session or recipient');
+            return route.fulfill({ status: 400 });
+          }
+          if (!retryKey) {
+            retryKey = body.request_key;
+            return route.fulfill({ status: 503 });
+          }
+          if (retryKey !== body.request_key) unexpected.push('retry did not reuse the original key');
+          return route.fulfill({ json: { message_id: 7 } });
         case 'GET /api/sessions/42/transcript':
           if (transcriptTooLarge) return route.fulfill({ status: 422, json: { error: 'transcript exceeds export limits' } });
           if (searchParams.get('format') === 'csv') {
@@ -154,7 +205,9 @@ const test = base.extend<{
           return route.fulfill({ contentType: 'audio/wav', body: silentWave() });
         case 'POST /api/sessions/42/send-as':
           if (body?.impersonated_role !== 'executor' || body?.content_type !== 'text' ||
-              body?.content !== 'Fixture panel reply' || !session.client_user_id) {
+              body?.content !== 'Fixture panel reply' || !session.client_user_id ||
+              body?.recipient_role !== 'client' || body?.recipient_user_id !== session.client_user_id ||
+              !/^[a-f0-9-]{36}$/.test(body?.request_key ?? '')) {
             unexpected.push('invalid send-as request');
             return route.fulfill({ status: 400 });
           }
@@ -178,13 +231,13 @@ const panelLabels = {
   ru: {
     login: 'Логин', password: 'Пароль', signIn: 'Войти', code: 'Код', invalidCode: 'Неверный код подтверждения',
     sessions: 'Сессии', openSession: 'Открыть сессию', delivered: 'доставлено', photo: 'Фото',
-    sendAs: 'Отправить от имени', send: 'Отправить', message: 'Сообщение', client: 'Клиент',
+    recipient: 'Получатель', send: 'Отправить', message: 'Сообщение', client: 'Клиент',
     executor: 'Исполнитель', queued: 'ожидает доставки', language: 'Язык', active: 'Активна',
   },
   en: {
     login: 'Username', password: 'Password', signIn: 'Sign in', code: 'Code', invalidCode: 'Incorrect verification code',
     sessions: 'Sessions', openSession: 'Open session', delivered: 'delivered', photo: 'Photo',
-    sendAs: 'Send as', send: 'Send', message: 'Message', client: 'Client',
+    recipient: 'Recipient', send: 'Send', message: 'Message', client: 'Client',
     executor: 'Service provider', queued: 'awaiting delivery', language: 'Language', active: 'Active',
   },
 };
@@ -202,6 +255,60 @@ async function enterTOTP(page: Page, labels = panelLabels.ru, code = fixture.tot
   await page.getByRole('textbox', { name: labels.code, exact: true }).fill(code);
   await page.getByRole('button', { name: labels.signIn, exact: true }).click();
 }
+
+test('request link returns after sign-in and creates its linked session', async ({ page, sessionFixture }) => {
+  await page.goto('/incoming-requests/11');
+  await expect(page).toHaveURL(/\/login$/);
+  await enterCredentials(page);
+  await enterTOTP(page);
+  await expect(page).toHaveURL(/\/incoming-requests\/11$/);
+  await page.getByRole('button', { name: 'Взять в работу' }).press('Enter');
+  await expect(page.getByRole('heading', { name: 'Обращение #11' })).toBeFocused();
+  await expect(page.getByRole('status').filter({ hasText: 'Обращение взято в работу' })).toBeVisible();
+  await page.getByRole('button', { name: 'Создать сессию' }).click();
+  await expect(page).toHaveURL(new RegExp(`/sessions/${sessionFixture.id}$`));
+  await page.getByRole('link', { name: 'Входящие обращения', exact: true }).click();
+  await page.getByRole('button', { name: 'Мои', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Открыть сессию', exact: true }))
+    .toHaveAttribute('href', `/sessions/${sessionFixture.id}`);
+});
+
+test.describe('uncertain session creation', () => {
+  test.use({ lostSessionResponse: true });
+
+  test('recovers the linked session after the creation response times out', async ({ page, sessionFixture }) => {
+    await page.goto('/incoming-requests/11');
+    await enterCredentials(page);
+    await enterTOTP(page);
+    await page.getByRole('button', { name: 'Взять в работу' }).click();
+    await page.getByRole('button', { name: 'Создать сессию' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Не удалось подтвердить создание' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Открыть сессию' })).toHaveAttribute('href', `/sessions/${sessionFixture.id}`);
+    await expect(page.getByRole('button', { name: 'Создать сессию' })).toHaveCount(0);
+  });
+});
+
+test.describe('administrator request transfer', () => {
+  test.use({ operatorRole: 'admin' });
+
+  test('opens a request from the all-assigned queue and transfers ownership', async ({ page, sessionFixture }) => {
+    await page.goto('/incoming-requests/11');
+    await enterCredentials(page);
+    await enterTOTP(page);
+    await page.getByRole('button', { name: 'Взять в работу' }).click();
+    await page.getByRole('button', { name: 'Создать сессию' }).click();
+    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionFixture.id}$`));
+    await page.getByRole('link', { name: 'Входящие обращения', exact: true }).click();
+    await page.getByRole('button', { name: 'Все в работе' }).click();
+    await page.getByRole('link', { name: 'Fixture request' }).click();
+    await expect(page.getByText('Ответственный · Fixture admin')).toBeVisible();
+    await page.getByRole('combobox', { name: 'Новый ответственный' }).click();
+    await page.getByRole('option', { name: 'Fixture target' }).click();
+    await page.getByRole('button', { name: 'Передать обращение' }).click();
+    await expect(page.getByText('Ответственный · Fixture target')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Открыть сессию' })).toHaveAttribute('href', `/sessions/${sessionFixture.id}`);
+  });
+});
 
 async function openSession(page: Page, labels: Labels) {
   await page.getByRole('row').filter({ hasText: 'Fixture session' }).getByRole('button', { name: labels.openSession }).click();
@@ -259,31 +366,60 @@ for (const [language, labels] of Object.entries(panelLabels)) {
     await expect.poll(() => page.getByRole('img', { name: labels.photo }).evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
     await expect.poll(() => page.locator('audio').evaluate((audio: HTMLAudioElement) => audio.duration)).toBe(0.5);
 
-    const sender = page.getByRole('combobox', { name: labels.sendAs });
+    const recipient = page.getByRole('combobox', { name: labels.recipient });
     const submit = page.getByRole('button', { name: labels.send, exact: true });
     const reply = page.getByRole('textbox', { name: labels.message });
     await reply.fill('Fixture panel reply');
-    await sender.click();
+    await recipient.click();
     await page.getByRole('option', { name: labels.client }).click();
-    await expect(sender).toHaveValue('');
+    await expect(recipient).toHaveValue('');
     await page.getByRole('option', { name: labels.executor }).click();
-    await expect(sender).toHaveValue('');
+    await expect(recipient).toHaveValue('');
     await expect(submit).toBeDisabled();
-    await sender.press('Escape');
+    await recipient.press('Escape');
 
     sessionFixture.client_user_id = 12;
     await page.getByText(labels.sessions, { exact: true }).click();
     await openSession(page, labels);
-    await sender.click();
-    await page.getByRole('option', { name: labels.client }).click();
-    await expect(sender).toHaveValue('');
+    await recipient.click();
     await page.getByRole('option', { name: labels.executor }).click();
+    await expect(recipient).toHaveValue('');
+    await page.getByRole('option', { name: labels.client }).click();
+    await expect(recipient).toHaveValue(labels.client);
     await reply.fill('Fixture panel reply');
     await submit.click();
     await expect(page.getByText('Fixture panel reply')).toBeVisible();
     await expect(page.getByText(labels.queued, { exact: false })).toBeVisible();
   });
 }
+
+test.describe('operator reply context', () => {
+  test.use({ multipleSessions: true });
+
+  test('switching cards clears the draft and retry preserves the recipient and key', async ({ page, sessionFixture }) => {
+    await page.goto('/login');
+    await enterCredentials(page);
+    await enterTOTP(page);
+    await page.getByRole('link', { name: sessionFixture.title, exact: true }).click();
+    const text = page.getByRole('textbox', { name: 'Сообщение' });
+    await text.fill('Draft for the previous session');
+    await page.getByRole('link', { name: 'Сессии', exact: true }).click();
+    await page.getByRole('row', { name: /Second fixture session/ })
+      .getByRole('button', { name: 'Открыть сессию' }).click();
+    await expect(page).toHaveURL(/\/sessions\/43$/);
+    await expect(text).toHaveValue('');
+    await page.getByRole('combobox', { name: 'Получатель' }).click();
+    await page.getByRole('option', { name: 'Клиент', exact: true }).click();
+    await expect(page.getByText('Сессия №43 · получатель: Клиент', { exact: false })).toBeVisible();
+    await text.fill('Second card reply');
+    const submit = page.getByRole('button', { name: 'Отправить', exact: true });
+    await submit.click();
+    await expect(page.getByText('Не удалось поставить сообщение в очередь')).toBeVisible();
+    await expect(text).toHaveValue('Second card reply');
+    await submit.click();
+    await expect(text).toHaveValue('');
+  });
+});
 
 test('session transcript can be downloaded in both formats', async ({ page }) => {
   await page.goto('/login');

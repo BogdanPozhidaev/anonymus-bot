@@ -387,8 +387,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Request status (new or processed)",
+                        "description": "Request status (new, in_progress for the caller's assignments, or processed)",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Use all with in_progress to list all assigned requests as an administrator",
+                        "name": "scope",
                         "in": "query"
                     },
                     {
@@ -414,6 +420,222 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/incoming-requests/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "incoming-requests"
+                ],
+                "summary": "Read an incoming request",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Incoming request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.incomingRequestListItem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/incoming-requests/{id}/claim": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "incoming-requests"
+                ],
+                "summary": "Claim an incoming request",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Incoming request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/incoming-requests/{id}/session": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incoming-requests"
+                ],
+                "summary": "Create or open the session linked to an incoming request",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Incoming request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Session details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.createSessionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/incoming-requests/{id}/transfer": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incoming-requests"
+                ],
+                "summary": "Transfer an assigned request and its linked session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Incoming request ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Expected and new owner",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.transferIncomingRequestBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -762,7 +984,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Text and sender role",
+                        "description": "Text, sender role and optional explicit recipient with a retry key",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -790,6 +1012,15 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1033,6 +1264,41 @@ const docTemplate = `{
                 }
             }
         },
+        "api.incomingRequestListItem": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "first_message_text": {
+                    "type": "string"
+                },
+                "first_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "language_code": {
+                    "type": "string"
+                },
+                "owner_operator_id": {
+                    "type": "integer"
+                },
+                "session_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "telegram_id": {
+                    "type": "integer"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
         "api.issueRecoveryCodesRequest": {
             "type": "object",
             "required": [
@@ -1124,6 +1390,19 @@ const docTemplate = `{
                         "client",
                         "executor"
                     ]
+                },
+                "recipient_role": {
+                    "type": "string",
+                    "enum": [
+                        "client",
+                        "executor"
+                    ]
+                },
+                "recipient_user_id": {
+                    "type": "integer"
+                },
+                "request_key": {
+                    "type": "string"
                 }
             }
         },
@@ -1138,6 +1417,21 @@ const docTemplate = `{
                 },
                 "temporary_password": {
                     "type": "string"
+                }
+            }
+        },
+        "api.transferIncomingRequestBody": {
+            "type": "object",
+            "required": [
+                "expected_owner_id",
+                "operator_id"
+            ],
+            "properties": {
+                "expected_owner_id": {
+                    "type": "integer"
+                },
+                "operator_id": {
+                    "type": "integer"
                 }
             }
         },

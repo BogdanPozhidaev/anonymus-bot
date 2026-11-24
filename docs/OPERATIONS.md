@@ -19,6 +19,55 @@ status, authenticated health checks and external TLS.
 - For operational handover, pass configuration locations and access
   ownership securely. Use synthetic accounts for smoke tests.
 
+## Single-organization pilot
+
+Create a fresh Compose project with a protected fixture env file and
+loopback panel binding. Follow [isolated deployment](DEPLOYMENT.md#start-an-isolated-http-stand).
+Verify HTTP 200 for the panel and `/api/health`, a clean migration
+version and healthy Compose services. Create the first administrator,
+enroll TOTP, invite an operator, complete their required password change
+and verify a fresh sign-in.
+
+Use a separate test bot and authorized synthetic participants for a
+Telegram acceptance run. Create a request, claim it, open its linked
+session, transfer it and confirm that only its new owner and administrators
+can open it. Redeem both invitations, then verify a reply to the
+explicitly selected recipient. A local fake bot verifies delivery from the
+worker through the internal endpoint. Acceptance by Telegram and reading
+by a participant require their own observations.
+
+For diagnosis, use the same Compose project, env file and overrides as
+the running deployment.
+
+```powershell
+docker compose @compose ps
+docker compose @compose run --rm -T --no-deps migrate migrate status
+docker compose @compose logs --tail 100 backend
+```
+
+Do not share raw service logs. Check the session history first for queued,
+retrying and failed messages. With monitoring enabled, inspect backend
+scrape health, outbox query health and queued and retrying counts in
+[Monitoring](#monitoring). A paused session or missing participant can
+hold valid work in the queue. Outbox failure after an ownership change
+requires review and a new intentional reply by the current operator.
+
+The delivery worker runs in the backend process. To stop delivery during
+a maintenance window, stop incoming traffic and then stop the bot and
+backend. This also takes the operator API offline. Stopping the bot alone
+leaves the worker running and may consume retries. Stopping the backend
+follows its graceful shutdown procedure below. Keep PostgreSQL and media
+volumes for [backup and isolated recovery](../deploy/backup/README.md).
+
+Before a release, record the tested commit, image versions, clean schema
+version, ownership results and a verified backup. Apply compatible schema
+changes before starting the new backend and panel. Keep the new data
+when reverting application images. Read the
+[schema 13 worker rollback constraints](MIGRATIONS.MD) before restoring
+an older backend. Run migrations and database grant provisioning on the
+recovered fixture, then test access and one representative media file
+before restoring traffic.
+
 ## Backend shutdown
 
 On SIGTERM or interrupt, the backend stops accepting HTTP connections

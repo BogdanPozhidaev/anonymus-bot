@@ -2,7 +2,7 @@ import { usePanelLocale } from '../i18n/panelLocale';
 import type { MessageKey } from '../i18n/messages';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { TextInput, PasswordInput, Button, Paper, Title, Stack, Text, Image, Alert } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
@@ -33,6 +33,8 @@ function authErrorMessage(error: unknown, fallback: MessageKey): LoginError {
 export function LoginPage() {
   const { t, productName, loginSubtitle } = usePanelLocale();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.returnTo;
   const queryClient = useQueryClient();
   const setSession = useAuthStore((s) => s.setSession);
   const [oidcCallback] = useState(() => new URLSearchParams(window.location.search).get('oidc'));
@@ -50,7 +52,9 @@ export function LoginPage() {
   useEffect(() => {
     if (!oidcCallback || callbackHandled.current) return;
     callbackHandled.current = true;
-    navigate('/login', { replace: true });
+    const returnTo = sessionStorage.getItem('oidc-request-return');
+    sessionStorage.removeItem('oidc-request-return');
+    navigate('/login', { replace: true, state: { returnTo } });
     if (oidcCallback === 'complete') {
       void completeOIDC().then(response => {
         if (response.status !== 'totp_required' || !response.pending_token) throw new Error('Incomplete sign-in');
@@ -64,7 +68,13 @@ export function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      window.location.assign(await startOIDC());
+      const authorizationURL = await startOIDC();
+      if (typeof returnTo === 'string' && /^\/incoming-requests\/\d+$/.test(returnTo)) {
+        sessionStorage.setItem('oidc-request-return', returnTo);
+      } else {
+        sessionStorage.removeItem('oidc-request-return');
+      }
+      window.location.assign(authorizationURL);
     } catch (err) {
       setError(authErrorMessage(err, 'oidcFailed'));
       setLoading(false);
@@ -140,7 +150,7 @@ export function LoginPage() {
         return;
       }
       notifications.show({ message: t('signedIn'), color: 'green' });
-      navigate('/dashboard', { replace: true });
+      navigate(typeof returnTo === 'string' && /^\/incoming-requests\/\d+$/.test(returnTo) ? returnTo : '/dashboard', { replace: true });
     } catch (err) {
       setError(authErrorMessage(err, 'invalidTotp'));
     } finally {

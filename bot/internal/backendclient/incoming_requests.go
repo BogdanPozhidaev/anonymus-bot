@@ -14,7 +14,8 @@ type CreateIncomingRequestRequest struct {
 }
 
 type CreateIncomingRequestResponse struct {
-	ID int64 `json:"id"`
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
 }
 
 type IncomingRequestInternalItem struct {
@@ -43,9 +44,4 @@ func (c *Client) ListIncomingRequestsInternal(ctx context.Context, offset int) (
 		return nil, false, err
 	}
 	return resp.Requests, resp.HasMore, nil
-}
-
-func (c *Client) MarkIncomingRequestProcessed(ctx context.Context, requestID int64) error {
-	path := fmt.Sprintf("/internal/incoming-requests/%d/mark-processed", requestID)
-	return c.doRequest(ctx, "POST", path, nil, nil)
 }

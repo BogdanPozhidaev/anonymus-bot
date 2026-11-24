@@ -60,6 +60,7 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 	}
 
 	var alerts, sends atomic.Int32
+	var lastDelivery atomic.Pointer[botclient.SendMessageRequest]
 	notices := make(chan botclient.SendMessageRequest, 8)
 	botToken := strings.Repeat("b", 64)
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +80,8 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 			}
 			if req.SessionID == 0 {
 				notices <- req
+			} else {
+				lastDelivery.Store(&req)
 			}
 		default:
 			t.Error("unexpected bot route")
@@ -313,12 +316,33 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 			t.Fatal("session details exposed a previously issued invitation token")
 		}
 		request(t, http.MethodDelete, freshPath+"/invites/executor", "", bearer, http.StatusNoContent)
+		// The earlier stop request leaves the original session pending until it is resumed.
+		// Set up both active fixtures here so this subtest also works on its own.
+		if err := sessions.UpdateStatus(ctx, session.ID, models.SessionStatusActive); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, "UPDATE sessions SET created_at=$1 WHERE id IN ($2, $3)", session.CreatedAt, session.ID, fresh.ID); err != nil {
+			t.Fatal(err)
+		}
 		page := request(t, http.MethodGet, "/api/sessions?q=fixture&status=active&limit=1", "", bearer, http.StatusOK)
 		second := request(t, http.MethodGet, "/api/sessions?q=fixture&status=active&limit=1&offset=1", "", bearer, http.StatusOK)
-		if !strings.Contains(page, `"has_more":true`) || !strings.Contains(page, "Fresh fixture") ||
-			!strings.Contains(second, `"has_more":false`) || strings.Contains(second, "Fresh fixture") {
-			t.Fatal("session pagination did not apply the search and status")
+		assertSessionPage := func(body string, wantID int64, hasMore bool) {
+			t.Helper()
+			var got struct {
+				Sessions []struct {
+					ID int64 `json:"id"`
+				} `json:"sessions"`
+				HasMore bool `json:"has_more"`
+			}
+			if err := json.Unmarshal([]byte(body), &got); err != nil {
+				t.Fatalf("decode session page: %v", err)
+			}
+			if len(got.Sessions) != 1 || got.Sessions[0].ID != wantID || got.HasMore != hasMore {
+				t.Fatalf("expected session %d with has_more=%t, got IDs %+v with has_more=%t", wantID, hasMore, got.Sessions, got.HasMore)
+			}
 		}
+		assertSessionPage(page, fresh.ID, true)
+		assertSessionPage(second, session.ID, false)
 		if body := request(t, http.MethodGet, "/api/sessions?status=closed", "", bearer, http.StatusOK); !strings.Contains(body, `"sessions":[]`) {
 			t.Fatal("status filter returned an active session")
 		}
@@ -547,6 +571,228 @@ func TestServerWiringWithFakeBot(t *testing.T) {
 		}
 	}
 	request(t, http.MethodPatch, fmt.Sprintf("/api/sessions/%d/status", session.ID), `{"status":"active"}`, bearer, http.StatusOK)
+	t.Run("operator reply targets the session in the request", func(t *testing.T) {
+		secondClient := models.User{TelegramID: 606, LanguageCode: "ru"}
+		if err := users.Create(ctx, &secondClient); err != nil {
+			t.Fatal(err)
+		}
+		owner := models.Operator{Name: "Reply operator", Login: "fixture-reply-owner", TelegramID: &executor.TelegramID,
+			Role: models.OperatorRoleOperator, Status: models.OperatorStatusActive, Language: "ru"}
+		if err := operators.Create(ctx, &owner); err != nil {
+			t.Fatal(err)
+		}
+		ownerBearer, err := access.Create(ctx, auth.SessionData{OperatorID: owner.ID, Role: owner.Role, AuthVersion: owner.AuthVersion})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := users.SetActiveSession(ctx, executor.ID, session.ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, user := range []models.User{client, secondClient} {
+			body := fmt.Sprintf(`{"telegram_id":%d}`, user.TelegramID)
+			request(t, http.MethodPost, "/internal/incoming-requests", body, "", http.StatusCreated)
+		}
+		second := models.Session{Title: "Second client", Status: models.SessionStatusActive,
+			Language: "ru", ClientUserID: &secondClient.ID, ExecutorUserID: &executor.ID, OwnerOperatorID: &owner.ID}
+		if err := sessions.Create(ctx, &second); err != nil {
+			t.Fatal(err)
+		}
+		before := sends.Load()
+		path := fmt.Sprintf("/api/sessions/%d/send-as", second.ID)
+		reply := func(recipient int64, key, content string) string {
+			return fmt.Sprintf(`{"impersonated_role":"executor","content_type":"text","recipient_role":"client","recipient_user_id":%d,"request_key":%q,"content":%q}`,
+				recipient, key, content)
+		}
+		const key = "10000000-0000-4000-8000-000000000001"
+		request(t, http.MethodPost, path, reply(secondClient.ID, "invalid", "Invalid key"), ownerBearer, http.StatusBadRequest)
+		request(t, http.MethodPost, path, reply(client.ID, key, "Wrong recipient"), ownerBearer, http.StatusConflict)
+		body := reply(secondClient.ID, key, "Second request reply")
+		first := request(t, http.MethodPost, path, body, ownerBearer, http.StatusOK)
+		if strings.Contains(first, "recipient_telegram_id") {
+			t.Fatal("explicit reply response must not expose the Telegram recipient ID")
+		}
+		if retry := request(t, http.MethodPost, path, body, ownerBearer, http.StatusOK); retry != first {
+			t.Fatal("repeated reply returned a different message")
+		}
+		request(t, http.MethodPost, path, reply(secondClient.ID, key, "Different request"), ownerBearer, http.StatusConflict)
+		if ok, err := worker.ProcessNext(ctx); !ok || err != nil {
+			t.Fatalf("process operator reply: processed=%t, err=%v", ok, err)
+		}
+		got := lastDelivery.Load()
+		if got == nil || got.SessionID != second.ID || got.RecipientTelegramID != secondClient.TelegramID {
+			t.Fatal("operator reply was not delivered to the second session's client")
+		}
+		if ok, err := worker.ProcessNext(ctx); ok || err != nil || sends.Load() != before+1 {
+			t.Fatalf("expected only one bot send: processed=%t, err=%v, sends=%d", ok, err, sends.Load()-before)
+		}
+		for _, tc := range []struct {
+			name, update string
+			value, prior any
+			status       int
+		}{
+			{"participant replaced", "UPDATE sessions SET client_user_id=$1 WHERE id=$2", client.ID, secondClient.ID, http.StatusConflict},
+			{"session closed", "UPDATE sessions SET status=$1 WHERE id=$2", models.SessionStatusClosed, models.SessionStatusActive, http.StatusConflict},
+			{"operator access changed", "UPDATE sessions SET owner_operator_id=$1 WHERE id=$2", operator.ID, owner.ID, http.StatusForbidden},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				message := request(t, http.MethodPost, path, `{"impersonated_role":"executor","content_type":"text","content":"Queued fixture"}`, ownerBearer, http.StatusOK)
+				var result struct {
+					ID int64 `json:"message_id"`
+				}
+				if err := json.Unmarshal([]byte(message), &result); err != nil || result.ID == 0 {
+					t.Fatalf("invalid queued message: %v", err)
+				}
+				item, err := messages.ClaimDelivery(ctx, time.Minute)
+				if err != nil || item == nil || item.MessageID != result.ID || item.Cancelled {
+					t.Fatalf("could not lease expected message: %v", err)
+				}
+				if err := messages.CompleteDelivery(ctx, item, false, 0, 5); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, tc.update, tc.value, second.ID); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if _, err := pool.Exec(ctx, tc.update, tc.prior, second.ID); err != nil {
+						t.Error(err)
+					}
+				}()
+				request(t, http.MethodPost, path, body, ownerBearer, tc.status)
+				if ok, err := worker.ProcessNext(ctx); !ok || err != nil || sends.Load() != before+1 {
+					t.Fatalf("invalidated retry must not reach the bot: processed=%t, err=%v", ok, err)
+				}
+				var status string
+				if err := pool.QueryRow(ctx, "SELECT status FROM message_outbox WHERE message_id=$1", result.ID).Scan(&status); err != nil || status != "failed" {
+					t.Fatalf("expected terminal failure, got %q: %v", status, err)
+				}
+			})
+		}
+		var queued int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM message_outbox o JOIN messages m ON m.id=o.message_id WHERE m.session_id=$1", second.ID).Scan(&queued); err != nil || queued != 4 {
+			t.Fatalf("unexpected number of queue records: %d, %v", queued, err)
+		}
+		role, content := models.SenderRoleExecutor, "Legacy queued reply"
+		legacy := &models.Message{SessionID: second.ID, SenderRole: models.SenderRoleOperator, SentByOperator: true,
+			ImpersonatedRole: &role, ContentType: models.ContentTypeText, Content: &content}
+		if err := messages.Enqueue(ctx, legacy); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := worker.ProcessNext(ctx); !ok || err != nil || sends.Load() != before+1 {
+			t.Fatalf("legacy reply without a fixed recipient must not reach the bot: processed=%t, err=%v", ok, err)
+		}
+		var legacyStatus string
+		if err := pool.QueryRow(ctx, "SELECT status FROM message_outbox WHERE message_id=$1", legacy.ID).Scan(&legacyStatus); err != nil || legacyStatus != "failed" {
+			t.Fatalf("expected legacy reply to fail safely: %q, %v", legacyStatus, err)
+		}
+	})
+
+	t.Run("incoming request claim and linked session", func(t *testing.T) {
+		body := request(t, http.MethodPost, "/internal/incoming-requests", `{"telegram_id":607,"first_message_text":"Fixture request details"}`, "", http.StatusCreated)
+		var created struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(body), &created); err != nil || created.ID == 0 {
+			t.Fatalf("invalid created request: %v", err)
+		}
+		path := fmt.Sprintf("/api/incoming-requests/%d", created.ID)
+		request(t, http.MethodGet, path, "", "", http.StatusUnauthorized)
+		request(t, http.MethodPost, path+"/session", `{"title":"Queue fixture"}`, bearer, http.StatusConflict)
+		request(t, http.MethodPost, path+"/claim", "", bearer, http.StatusNoContent)
+		request(t, http.MethodPost, path+"/claim", "", bearer, http.StatusNoContent)
+		reused := request(t, http.MethodPost, "/internal/incoming-requests", `{"telegram_id":607}`, "", http.StatusOK)
+		var returned struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(reused), &returned); err != nil ||
+			returned.ID != created.ID || returned.Status != models.IncomingRequestStatusInProgress {
+			t.Fatalf("repeat request did not return the assigned card: %+v, %v", returned, err)
+		}
+		other := models.Operator{Name: "Queue operator", Login: "fixture-queue-other",
+			Role: models.OperatorRoleOperator, Status: models.OperatorStatusActive, Language: "en"}
+		if err := operators.Create(ctx, &other); err != nil {
+			t.Fatal(err)
+		}
+		otherToken, err := access.Create(ctx, auth.SessionData{OperatorID: other.ID, Role: other.Role, AuthVersion: other.AuthVersion})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request(t, http.MethodGet, path, "", otherToken, http.StatusForbidden)
+		request(t, http.MethodPost, path+"/claim", "", otherToken, http.StatusConflict)
+		first := request(t, http.MethodPost, path+"/session", `{"title":"Queue fixture"}`, bearer, http.StatusCreated)
+		repeat := request(t, http.MethodPost, path+"/session", `{"title":"Queue fixture"}`, bearer, http.StatusOK)
+		if first != repeat {
+			t.Fatal("session retry changed the linked session")
+		}
+		request(t, http.MethodPatch, path+"/status", `{"status":"processed"}`, bearer, http.StatusConflict)
+		detail := request(t, http.MethodGet, path, "", bearer, http.StatusOK)
+		var item models.IncomingRequest
+		if err := json.Unmarshal([]byte(detail), &item); err != nil || item.Status != models.IncomingRequestStatusInProgress ||
+			item.OwnerOperatorID == nil || *item.OwnerOperatorID != operator.ID || item.SessionID == nil {
+			t.Fatalf("request detail omitted its assignment or session: %v", err)
+		}
+		request(t, http.MethodGet, "/api/incoming-requests?status=in_progress", "", bearer, http.StatusOK)
+		request(t, http.MethodGet, "/api/incoming-requests?status=in_progress&scope=all", "", otherToken, http.StatusForbidden)
+		request(t, http.MethodGet, "/api/incoming-requests?scope=all", "", bearer, http.StatusBadRequest)
+		request(t, http.MethodGet, "/api/incoming-requests?status=in_progress&scope=all", "", bearer, http.StatusOK)
+		transferBody := func(expected, next int64) string {
+			return fmt.Sprintf(`{"expected_owner_id":%d,"operator_id":%d}`, expected, next)
+		}
+		request(t, http.MethodPost, path+"/transfer", transferBody(operator.ID, other.ID), otherToken, http.StatusForbidden)
+		request(t, http.MethodPost, path+"/transfer", transferBody(operator.ID, other.ID), bearer, http.StatusNoContent)
+		request(t, http.MethodPost, path+"/transfer", transferBody(operator.ID, other.ID), bearer, http.StatusNoContent)
+		request(t, http.MethodGet, path, "", otherToken, http.StatusOK)
+		sessionPath := fmt.Sprintf("/api/sessions/%d", *item.SessionID)
+		request(t, http.MethodGet, sessionPath, "", otherToken, http.StatusOK)
+		for _, tc := range []struct {
+			role, want string
+			telegramID int64
+		}{
+			{"client", "", 607},
+			{"executor", "Fixture request details", 6080},
+		} {
+			issued := request(t, http.MethodPost, sessionPath+"/invites", fmt.Sprintf(`{"role":%q}`, tc.role), otherToken, http.StatusCreated)
+			var invitation struct {
+				Token string `json:"token"`
+			}
+			if err := json.Unmarshal([]byte(issued), &invitation); err != nil || invitation.Token == "" {
+				t.Fatal("failed to issue test invitation")
+			}
+			bound := request(t, http.MethodPost, "/internal/sessions/bind", fmt.Sprintf(`{"telegram_id":%d,"token":%q}`, tc.telegramID, invitation.Token), "", http.StatusOK)
+			var result struct {
+				Role        string `json:"role"`
+				RequestText string `json:"request_text"`
+			}
+			if err := json.Unmarshal([]byte(bound), &result); err != nil || result.Role != tc.role || result.RequestText != tc.want {
+				t.Fatalf("unexpected invitation response for role %s", tc.role)
+			}
+		}
+
+		next := models.Operator{Name: "Next operator", Login: "fixture-queue-next",
+			Role: models.OperatorRoleOperator, Status: models.OperatorStatusActive, Language: "en"}
+		if err := operators.Create(ctx, &next); err != nil {
+			t.Fatal(err)
+		}
+		nextToken, err := access.Create(ctx, auth.SessionData{OperatorID: next.ID, Role: next.Role, AuthVersion: next.AuthVersion})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request(t, http.MethodPost, path+"/transfer", transferBody(operator.ID, next.ID), bearer, http.StatusConflict)
+		request(t, http.MethodPost, path+"/transfer", transferBody(other.ID, next.ID), bearer, http.StatusNoContent)
+		request(t, http.MethodGet, path, "", otherToken, http.StatusForbidden)
+		request(t, http.MethodGet, sessionPath, "", otherToken, http.StatusForbidden)
+		request(t, http.MethodGet, path, "", nextToken, http.StatusOK)
+		request(t, http.MethodGet, sessionPath, "", nextToken, http.StatusOK)
+		action := "incoming_request_transferred"
+		entries, err := audit.List(ctx, repository.AuditLogFilter{Action: &action})
+		if err != nil || len(entries) != 2 || entries[0].TargetID == nil || *entries[0].TargetID != created.ID {
+			t.Fatalf("transfer audit should record only completed ownership changes: %v", err)
+		}
+		request(t, http.MethodPatch, fmt.Sprintf("/api/operators/%d", next.ID), `{"status":"suspended"}`, bearer, http.StatusOK)
+		request(t, http.MethodGet, path, "", nextToken, http.StatusUnauthorized)
+		request(t, http.MethodPost, path+"/transfer", transferBody(next.ID, next.ID), bearer, http.StatusConflict)
+	})
+
 	if err := redis.Close(); err != nil {
 		t.Fatal(err)
 	}

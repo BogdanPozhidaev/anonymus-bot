@@ -177,8 +177,15 @@ func (s *Server) handleSendAlert(w http.ResponseWriter, r *http.Request) {
 		for _, b := range req.Buttons {
 			action, rawID, _ := strings.Cut(b.CallbackData, ":")
 			id, err := strconv.ParseInt(rawID, 10, 64)
-			if strings.HasPrefix(s.panelBaseURL, "https://") && err == nil && id > 0 && (action == "open_session" || action == "close_session") {
-				row = append(row, tgbotapi.NewInlineKeyboardButtonURL(b.Label, s.panelBaseURL+"/sessions/"+strconv.FormatInt(id, 10)))
+			var path string
+			switch action {
+			case "open_session", "close_session":
+				path = "/sessions/"
+			case "open_request":
+				path = "/incoming-requests/"
+			}
+			if strings.HasPrefix(s.panelBaseURL, "https://") && err == nil && id > 0 && path != "" {
+				row = append(row, tgbotapi.NewInlineKeyboardButtonURL(b.Label, s.panelBaseURL+path+strconv.FormatInt(id, 10)))
 			} else {
 				row = append(row, tgbotapi.NewInlineKeyboardButtonData(b.Label, b.CallbackData))
 			}

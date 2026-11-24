@@ -16,6 +16,7 @@ type Delivery struct {
 	SenderRole, ContentType, Content, FileID, Lease, Language string
 	Attempts                                                  int
 	Notice, CanNotify                                         bool
+	Cancelled                                                 bool
 }
 
 func (r *MessageRepository) OutboxBacklog(ctx context.Context) (queued, retrying int64, err error) {
@@ -42,29 +43,38 @@ func (r *MessageRepository) ClaimDelivery(ctx context.Context, lease time.Durati
 	const query = `
 WITH candidate AS (
  SELECT o.message_id, m.session_id,
-        CASE WHEN o.notice_pending THEN sender.telegram_id ELSE recipient.telegram_id END AS telegram_id,
+        COALESCE(CASE WHEN o.notice_pending THEN sender.telegram_id ELSE recipient.telegram_id END,0) AS telegram_id,
         COALESCE(CASE WHEN o.notice_pending THEN sender.language_code ELSE recipient.language_code END,'ru') AS language,
         COALESCE(m.impersonated_role,m.sender_role) AS sender_role, m.content_type,
         COALESCE(m.content,'') AS content, COALESCE(m.file_id,'') AS file_id,
         CASE WHEN o.notice_pending THEN o.notice_attempts ELSE o.attempts END AS attempts,
-        o.notice_pending, COALESCE(sender.telegram_id > 0,false) AS can_notify
+        o.notice_pending, COALESCE(sender.telegram_id > 0,false) AS can_notify,
+        NOT target.valid AS cancelled
  FROM message_outbox o JOIN messages m ON m.id=o.message_id
  JOIN sessions s ON s.id=m.session_id
  LEFT JOIN users sender ON sender.id=m.sender_user_id
  LEFT JOIN users recipient ON recipient.id=CASE COALESCE(m.impersonated_role,m.sender_role)
    WHEN 'client' THEN s.executor_user_id WHEN 'executor' THEN s.client_user_id END
+ LEFT JOIN operators op ON op.id=o.operator_id
+ CROSS JOIN LATERAL (SELECT NOT m.sent_by_operator OR COALESCE(
+   recipient.id=o.recipient_user_id AND recipient.telegram_id > 0 AND s.status<>'closed'
+   AND op.status='active' AND op.auth_version=o.operator_auth_version
+   AND (op.role='admin' OR op.id=s.owner_operator_id), false) AS valid) target
  WHERE o.available_at <= clock_timestamp()
  AND ((o.notice_pending AND sender.telegram_id > 0)
- OR (o.status IN ('queued','retrying') AND s.status='active' AND recipient.telegram_id > 0
- AND (m.sent_by_operator OR (m.sender_user_id = CASE m.sender_role WHEN 'client' THEN s.client_user_id WHEN 'executor' THEN s.executor_user_id END))))
+ OR (o.status IN ('queued','retrying') AND (NOT target.valid OR
+   (s.status='active' AND recipient.telegram_id > 0
+   AND (m.sent_by_operator OR (m.sender_user_id = CASE m.sender_role WHEN 'client' THEN s.client_user_id WHEN 'executor' THEN s.executor_user_id END))))))
  ORDER BY o.available_at, o.message_id
  FOR UPDATE OF o SKIP LOCKED LIMIT 1
 )
-UPDATE message_outbox o SET lease_token=$1, available_at=clock_timestamp()+($2::bigint * interval '1 millisecond')
+UPDATE message_outbox o SET lease_token=CASE WHEN c.cancelled THEN NULL ELSE $1::uuid END,
+ status=CASE WHEN c.cancelled THEN 'failed' ELSE o.status END,
+ available_at=clock_timestamp()+($2::bigint * interval '1 millisecond')
 FROM candidate c WHERE o.message_id=c.message_id
-RETURNING c.message_id,c.session_id,c.telegram_id,c.sender_role,c.content_type,c.content,c.file_id,c.attempts,c.notice_pending,c.can_notify,c.language`
+RETURNING c.message_id,c.session_id,c.telegram_id,c.sender_role,c.content_type,c.content,c.file_id,c.attempts,c.notice_pending,c.can_notify,c.language,c.cancelled`
 	d := &Delivery{Lease: uuid.NewString()}
-	err := r.pool.QueryRow(ctx, query, d.Lease, lease.Milliseconds()).Scan(&d.MessageID, &d.SessionID, &d.RecipientTelegramID, &d.SenderRole, &d.ContentType, &d.Content, &d.FileID, &d.Attempts, &d.Notice, &d.CanNotify, &d.Language)
+	err := r.pool.QueryRow(ctx, query, d.Lease, lease.Milliseconds()).Scan(&d.MessageID, &d.SessionID, &d.RecipientTelegramID, &d.SenderRole, &d.ContentType, &d.Content, &d.FileID, &d.Attempts, &d.Notice, &d.CanNotify, &d.Language, &d.Cancelled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

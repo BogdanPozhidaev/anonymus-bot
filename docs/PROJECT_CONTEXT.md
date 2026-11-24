@@ -12,7 +12,10 @@ Anonymus Bot is a Telegram-based platform for mediated communication between a c
 - PostgreSQL persistence, Redis-backed operator sessions/moderation counters, Docker Compose and Nginx configuration.
 - Retention/anonymization jobs.
 
-Feature completeness and runtime behavior must be verified against current code; see `KNOWN_ISSUES.md` and `SECURITY_AUDIT.md`.
+Use the [handover guide](PROJECT_HANDOVER.md) for current acceptance steps
+and the [development log](DEVELOPMENT_LOG.md) for recorded verification.
+The [known issues index](KNOWN_ISSUES.md) and [security audit](SECURITY_AUDIT.md)
+describe the historical review.
 
 ## Commercial objective
 Prepare the existing project for a possible whole-project sale, including source code and properly documented intellectual-property rights. A credible handover requires reproducible setup, tests, a working demo, accurate documentation, dependency/license review, contributor/IP confirmation, and secret/history scanning. No valuation or production-readiness claim is established by this context file.
@@ -28,4 +31,5 @@ Reconfirm versions and configuration in the current repository before implementa
 ## Current baseline and evidence
 The independent static review covered the uploaded archive at Git HEAD `5e63f63` (`Update README.md`). It did not access a live deployment or Telegram production environment. Backend and bot tests could not be run in that review environment because installed Go was older than module requirements; Docker was unavailable; `npm ci` timed out. Do not describe those checks as passing.
 
-See `DEVELOPMENT_ROADMAP.md` for the detailed audit and implementation sequence.
+See the [development roadmap](../DEVELOPMENT_ROADMAP.md) for the detailed
+audit and implementation sequence.

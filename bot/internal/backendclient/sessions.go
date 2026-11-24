@@ -17,6 +17,7 @@ type BindSessionResponse struct {
 	SessionID   int64  `json:"session_id"`
 	SessionType string `json:"role"`
 	Title       string `json:"title"`
+	RequestText string `json:"request_text,omitempty"`
 }
 
 type StopSessionResponse struct {

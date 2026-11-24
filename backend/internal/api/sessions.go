@@ -13,6 +13,7 @@ import (
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
+	"github.com/fastcheck/anonymus_bot/backend/internal/moderation"
 	"github.com/fastcheck/anonymus_bot/backend/internal/repository"
 	"github.com/fastcheck/anonymus_bot/backend/internal/service"
 )
@@ -29,6 +30,7 @@ type bindSessionResponse struct {
 	SessionID   int64  `json:"session_id"`
 	SessionType string `json:"role"`
 	Title       string `json:"title"`
+	RequestText string `json:"request_text,omitempty"`
 }
 
 type sessionListItem struct {
@@ -85,11 +87,24 @@ func (s *Server) handleBindSession(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, bindSessionResponse{
+	response := bindSessionResponse{
 		SessionID:   session.ID,
 		SessionType: role,
 		Title:       session.Title,
-	})
+	}
+	if role == models.SenderRoleExecutor {
+		text, err := s.incomingRequestRepo.FirstMessageForSession(ctx, session.ID)
+		if err != nil {
+			s.logger.Error("failed to load linked request text", "session_id", session.ID)
+		} else {
+			contact, _ := moderation.ContainsContactInfo(text)
+			suspicious, _ := moderation.ContainsSuspiciousPhrase(text)
+			if !contact && !suspicious {
+				response.RequestText = alertExcerpt(strings.TrimSpace(text), 3500)
+			}
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // handleListSessions godoc

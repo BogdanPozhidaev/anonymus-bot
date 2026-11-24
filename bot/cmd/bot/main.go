@@ -52,7 +52,7 @@ func main() {
 	blockedContentHandler := handlers.NewBlockedContentHandler(bot, logger)
 	sessionsListHandler := handlers.NewSessionsListHandler(bot, backend, logger)
 	stopHandler := handlers.NewStopHandler(bot, backend, logger)
-	alertCallbackHandler := handlers.NewAlertCallbackHandler(bot, backend, cfg.PanelBaseURL, logger)
+	alertCallbackHandler := handlers.NewAlertCallbackHandler(bot, cfg.PanelBaseURL, logger)
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -80,8 +80,9 @@ func main() {
 				sessionsListHandler.HandlePageCallback(ctx, update.CallbackQuery)
 			case strings.HasPrefix(update.CallbackQuery.Data, "open_session:"),
 				strings.HasPrefix(update.CallbackQuery.Data, "take_request:"),
+				strings.HasPrefix(update.CallbackQuery.Data, "open_request:"),
 				strings.HasPrefix(update.CallbackQuery.Data, "close_session:"):
-				alertCallbackHandler.Handle(ctx, update.CallbackQuery)
+				alertCallbackHandler.Handle(update.CallbackQuery)
 			case strings.HasPrefix(update.CallbackQuery.Data, "op_menu:"):
 				operatorHandler.HandleMenuCallback(ctx, update.CallbackQuery)
 			default:

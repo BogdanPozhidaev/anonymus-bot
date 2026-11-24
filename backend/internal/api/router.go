@@ -143,6 +143,9 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 			authenticated.GET("/sessions/:id/messages", s.handleListSessionMessages)
 			authenticated.GET("/sessions/:id/transcript", s.handleExportTranscript)
 			authenticated.GET("/incoming-requests", s.handleListIncomingRequests)
+			authenticated.GET("/incoming-requests/:id", s.handleGetIncomingRequest)
+			authenticated.POST("/incoming-requests/:id/claim", s.handleClaimIncomingRequest)
+			authenticated.POST("/incoming-requests/:id/session", s.handleOpenIncomingRequestSession)
 			authenticated.PATCH("/incoming-requests/:id/status", s.handleUpdateIncomingRequestStatus)
 			authenticated.POST("/sessions/:id/send-as", s.handleSendMessageAsOperator)
 			authenticated.GET("/messages/:id/media", s.handleGetMessageMedia)
@@ -151,6 +154,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine, internalToken string) {
 			adminOnly.Use(s.requireAdmin())
 			{
 				adminOnly.GET("/audit-log", s.handleListAuditLog)
+				adminOnly.POST("/incoming-requests/:id/transfer", s.handleTransferIncomingRequest)
 				adminOnly.GET("/operators", s.handleListOperators)
 				adminOnly.POST("/operators", s.handleCreateOperator)
 				adminOnly.PATCH("/operators/:id", s.handleUpdateOperator)

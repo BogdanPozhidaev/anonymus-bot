@@ -19,6 +19,29 @@ definitions:
     required:
     - title
     type: object
+  api.incomingRequestListItem:
+    properties:
+      created_at:
+        type: string
+      first_message_text:
+        type: string
+      first_name:
+        type: string
+      id:
+        type: integer
+      language_code:
+        type: string
+      owner_operator_id:
+        type: integer
+      session_id:
+        type: integer
+      status:
+        type: string
+      telegram_id:
+        type: integer
+      username:
+        type: string
+    type: object
   api.issueRecoveryCodesRequest:
     properties:
       code:
@@ -78,6 +101,15 @@ definitions:
         - client
         - executor
         type: string
+      recipient_role:
+        enum:
+        - client
+        - executor
+        type: string
+      recipient_user_id:
+        type: integer
+      request_key:
+        type: string
     required:
     - content
     - content_type
@@ -91,6 +123,16 @@ definitions:
         type: string
       temporary_password:
         type: string
+    type: object
+  api.transferIncomingRequestBody:
+    properties:
+      expected_owner_id:
+        type: integer
+      operator_id:
+        type: integer
+    required:
+    - expected_owner_id
+    - operator_id
     type: object
   api.updateSessionStatusRequest:
     properties:
@@ -399,9 +441,15 @@ paths:
   /api/incoming-requests:
     get:
       parameters:
-      - description: Request status (new or processed)
+      - description: Request status (new, in_progress for the caller's assignments,
+          or processed)
         in: query
         name: status
+        type: string
+      - description: Use all with in_progress to list all assigned requests as an
+          administrator
+        in: query
+        name: scope
         type: string
       - description: Page size (1–200, default 50)
         in: query
@@ -428,6 +476,142 @@ paths:
       security:
       - BearerAuth: []
       summary: List incoming requests
+      tags:
+      - incoming-requests
+  /api/incoming-requests/{id}:
+    get:
+      parameters:
+      - description: Incoming request ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.incomingRequestListItem'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Read an incoming request
+      tags:
+      - incoming-requests
+  /api/incoming-requests/{id}/claim:
+    post:
+      parameters:
+      - description: Incoming request ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Claim an incoming request
+      tags:
+      - incoming-requests
+  /api/incoming-requests/{id}/session:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Incoming request ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Session details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.createSessionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create or open the session linked to an incoming request
+      tags:
+      - incoming-requests
+  /api/incoming-requests/{id}/transfer:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Incoming request ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Expected and new owner
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.transferIncomingRequestBody'
+      responses:
+        "204":
+          description: No Content
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Transfer an assigned request and its linked session
       tags:
       - incoming-requests
   /api/operators:
@@ -637,7 +821,8 @@ paths:
         name: id
         required: true
         type: integer
-      - description: Text and sender role
+      - description: Text, sender role and optional explicit recipient with a retry
+          key
         in: body
         name: request
         required: true
@@ -659,6 +844,12 @@ paths:
             type: object
         "403":
           description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
           schema:
             additionalProperties:
               type: string

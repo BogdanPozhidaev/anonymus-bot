@@ -1,1 +1,12 @@
 *.sh text eol=lf
+
+# Internal material omitted from source delivery archives.
+/AGENTS.md export-ignore
+/save.md export-ignore
+/DEVELOPMENT_ROADMAP.md export-ignore
+/docs/DECISIONS.md export-ignore
+/docs/DEVELOPMENT_LOG.md export-ignore
+/docs/IMPLEMENTATION_WORKPLAN.md export-ignore
+/docs/KNOWN_ISSUES.md export-ignore
+/docs/PROJECT_CONTEXT.md export-ignore
+/docs/SECURITY_AUDIT.md export-ignore

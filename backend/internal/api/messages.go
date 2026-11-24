@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/fastcheck/anonymus_bot/backend/internal/botclient"
 	"github.com/fastcheck/anonymus_bot/backend/internal/models"
@@ -33,6 +34,9 @@ type sendAsOperatorRequest struct {
 	ImpersonatedRole string `json:"impersonated_role" binding:"required,oneof=client executor"`
 	ContentType      string `json:"content_type" binding:"required,oneof=text"`
 	Content          string `json:"content" binding:"required"`
+	RecipientRole    string `json:"recipient_role" binding:"omitempty,oneof=client executor"`
+	RecipientUserID  int64  `json:"recipient_user_id" binding:"omitempty,gt=0"`
+	RequestKey       string `json:"request_key"`
 }
 
 func (s *Server) handleRelayMessage(c *gin.Context) {
@@ -68,10 +72,11 @@ func (s *Server) handleRelayMessage(c *gin.Context) {
 // @Produce      json
 // @Security     BearerAuth
 // @Param        id path int true "Session ID"
-// @Param        request body sendAsOperatorRequest true "Text and sender role"
+// @Param        request body sendAsOperatorRequest true "Text, sender role and optional explicit recipient with a retry key"
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      403 {object} map[string]string
+// @Failure      409 {object} map[string]string
 // @Failure      413 {object} map[string]string
 // @Failure      503 {object} map[string]string
 // @Router       /api/sessions/{id}/send-as [post]
@@ -85,6 +90,18 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
+	}
+
+	target := repository.OperatorDeliveryTarget{}
+	explicitTarget := req.RecipientRole != "" || req.RecipientUserID != 0 || req.RequestKey != ""
+	if explicitTarget {
+		key, err := uuid.Parse(req.RequestKey)
+		if err != nil || key == uuid.Nil || req.RecipientRole == "" ||
+			req.RecipientRole == req.ImpersonatedRole || req.RecipientUserID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid explicit recipient or request key"})
+			return
+		}
+		target.RequestKey = &key
 	}
 
 	ctx := c.Request.Context()
@@ -105,6 +122,10 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 	}
 
 	if session.Status != models.SessionStatusActive {
+		if explicitTarget {
+			c.JSON(http.StatusConflict, gin.H{"error": "session is not active"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session is not active"})
 		return
 	}
@@ -136,7 +157,15 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 	}
 
 	if recipientUserID == nil {
+		if explicitTarget {
+			c.JSON(http.StatusConflict, gin.H{"error": "recipient changed"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "counterparty not connected yet"})
+		return
+	}
+	if explicitTarget && *recipientUserID != req.RecipientUserID {
+		c.JSON(http.StatusConflict, gin.H{"error": "recipient changed"})
 		return
 	}
 
@@ -156,7 +185,21 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 		ImpersonatedRole: &impersonatedRole,
 	}
 
-	if err := s.messageRepo.Enqueue(ctx, message); err != nil {
+	target.OperatorID = operatorID
+	target.AuthVersion = c.GetInt64(contextKeyAuthVersion)
+	target.RecipientUserID = *recipientUserID
+	saved, err := s.messageRepo.EnqueueOperatorDelivery(ctx, message, target)
+	switch {
+	case errors.Is(err, repository.ErrOperatorDeliveryForbidden):
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	case errors.Is(err, repository.ErrOperatorDeliveryConflict):
+		c.JSON(http.StatusConflict, gin.H{"error": "delivery context changed"})
+		return
+	case errors.Is(err, repository.ErrNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	case err != nil:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create message"})
 		return
 	}
@@ -166,15 +209,19 @@ func (s *Server) handleSendMessageAsOperator(c *gin.Context) {
 		senderLabel = "Менеджер:"
 	}
 
-	s.writeAuditLog(c, operatorID, "operator", "operator_sent_message_as", "session", session.ID, gin.H{
-		"impersonated_role": req.ImpersonatedRole,
-	})
+	if saved {
+		s.writeAuditLog(c, operatorID, "operator", "operator_sent_message_as", "session", session.ID, gin.H{
+			"impersonated_role": req.ImpersonatedRole,
+			"recipient_user_id": target.RecipientUserID,
+			"message_id":        message.ID,
+		})
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message_id":            message.ID,
-		"recipient_telegram_id": recipient.TelegramID,
-		"sender_label":          senderLabel,
-	})
+	response := gin.H{"message_id": message.ID, "sender_label": senderLabel}
+	if !explicitTarget {
+		response["recipient_telegram_id"] = recipient.TelegramID
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (s *Server) sendModerationAlert(ctx context.Context, session *models.Session, modResult moderation.CheckResult) {

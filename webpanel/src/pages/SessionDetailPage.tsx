@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { sessionStatusMessages, usePanelLocale } from '../i18n/panelLocale';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -24,7 +25,7 @@ import { IconCopy, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
 import { assignSessionOwner, getSession, issueSessionInvite, revokeSessionInvite, updateSessionStatus } from '../api/sessions';
-import { downloadTranscript, listMessages, sendAsParticipant, type TranscriptFormat } from '../api/messages';
+import { createOperatorReplyKey, downloadTranscript, listMessages, sendAsParticipant, type OperatorReply, type TranscriptFormat } from '../api/messages';
 import { listOperators } from '../api/operators';
 import { panelConfig } from '../panelConfig';
 import { useAuthStore } from '../stores/authStore';
@@ -179,9 +180,10 @@ function SessionDetail({ sessionId }: { sessionId: number }) {
       </Paper>
       {session.status === 'active' && (
         <ReplyComposer
+          key={`${sessionId}:${session.client_user_id}:${session.executor_user_id}`}
           sessionId={sessionId}
-          clientConnected={session.client_user_id !== null}
-          executorConnected={session.executor_user_id !== null}
+          clientUserId={session.client_user_id}
+          executorUserId={session.executor_user_id}
           onSend={() => setOffset(0)}
         />
       )}
@@ -221,42 +223,63 @@ function SessionOwner({ sessionId, ownerId }: { sessionId: number; ownerId: numb
   );
 }
 
-function ReplyComposer({ sessionId, clientConnected, executorConnected, onSend }: {
-  sessionId: number; clientConnected: boolean; executorConnected: boolean; onSend: () => void;
+function ReplyComposer({ sessionId, clientUserId, executorUserId, onSend }: {
+  sessionId: number; clientUserId: number | null; executorUserId: number | null; onSend: () => void;
 }) {
   const { t } = usePanelLocale();
   const queryClient = useQueryClient();
-  const [role, setRole] = useState<'client' | 'executor' | null>(null);
+  const [recipientRole, setRecipientRole] = useState<OperatorReply['recipientRole'] | null>(null);
   const [text, setText] = useState('');
-  const recipientConnected = role === 'client' ? executorConnected : role === 'executor' && clientConnected;
+  const requestKey = useRef<string | null>(null);
+  const recipientUserId = recipientRole === 'client' ? clientUserId : recipientRole === 'executor' ? executorUserId : null;
   const send = useMutation({
-    mutationFn: ({ role, text }: { role: 'client' | 'executor'; text: string }) => sendAsParticipant(sessionId, role, text),
+    mutationFn: (reply: OperatorReply) => sendAsParticipant(sessionId, reply),
     onSuccess: () => {
+      requestKey.current = null;
       setText('');
       onSend();
       queryClient.invalidateQueries({ queryKey: ['session-messages', sessionId] });
       notifications.show({ message: t('messageQueued'), color: 'green' });
     },
-    onError: () => notifications.show({ message: t('messageQueueFailed'), color: 'red' }),
+    onError: (err) => {
+      const changed = isAxiosError(err) && err.response?.status === 409;
+      if (changed) queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      notifications.show({ message: t(changed ? 'messageRecipientChanged' : 'messageQueueFailed'), color: 'red' });
+    },
   });
 
   return (
     <form onSubmit={event => {
       event.preventDefault();
-      if (role && recipientConnected && text.trim() && !send.isPending) send.mutate({ role, text: text.trim() });
+      if (!recipientRole || !recipientUserId || !text.trim() || send.isPending) return;
+      requestKey.current ??= createOperatorReplyKey();
+      send.mutate({ recipientRole, recipientUserId, text: text.trim(), requestKey: requestKey.current });
     }}>
       <Stack gap="xs">
-        <Select label={t('sendAs')} value={role} disabled={send.isPending}
-          onChange={value => { if (value === 'client' || value === 'executor') setRole(value); }}
+        <Select label={t('messageRecipient')} value={recipientRole} disabled={send.isPending}
+          onChange={value => {
+            if (value === 'client' || value === 'executor' || value === null) {
+              setRecipientRole(value);
+              requestKey.current = null;
+            }
+          }}
           data={[
-            { value: 'client', label: t('client'), disabled: !executorConnected },
-            { value: 'executor', label: t('executor'), disabled: !clientConnected },
+            { value: 'client', label: t('client'), disabled: !clientUserId },
+            { value: 'executor', label: t('executor'), disabled: !executorUserId },
           ]}
         />
         <Textarea label={t('message')} value={text} disabled={send.isPending} maxLength={4000}
-          onChange={event => setText(event.currentTarget.value)}
+          onChange={event => {
+            setText(event.currentTarget.value);
+            requestKey.current = null;
+          }}
         />
-        <Button type="submit" loading={send.isPending} disabled={!role || !recipientConnected || !text.trim()}>
+        {recipientRole && <Text size="sm">{t('messageRecipientContext', {
+          id: sessionId,
+          recipient: t(recipientRole),
+          sender: t(recipientRole === 'client' ? 'executor' : 'client'),
+        })}</Text>}
+        <Button type="submit" loading={send.isPending} disabled={!recipientUserId || !text.trim()}>
           {t('send')}
         </Button>
       </Stack>
@@ -330,7 +353,6 @@ function DeeplinkRow({ label, sessionId, role, active, connected }: {
   );
 }
 
-import { useEffect, useState } from 'react';
 import { apiClient } from '../api/client';
 
 function MediaImage({ messageId }: { messageId: number }) {

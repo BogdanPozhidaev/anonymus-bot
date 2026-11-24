@@ -1,7 +1,41 @@
 # Secrets
 .env
 *.env
+.env.*
+!.env.*.example
 !.env.example
+
+# Local agent instructions and prompts
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+CODEX_REPO_HYGIENE_INSTRUCTIONS.md
+copilot-instructions.md
+.github/instructions/
+.github/prompts/
+.github/agents/
+.agents/
+.codex/
+.claude/
+.cursor/rules/
+.cursorrules
+.windsurf/rules/
+.windsurfrules
+.clinerules
+.roo/rules/
+.roorules
+.aider.conf.yml
+
+# Local deployment material and database snapshots
+/secrets/
+/infra/secrets/
+privkey.pem
+*.key
+*.p12
+*.pfx
+*.dump
 
 # Go
 bin/

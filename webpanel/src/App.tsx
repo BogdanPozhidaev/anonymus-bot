@@ -35,6 +35,7 @@ function App() {
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/sessions/:id" element={<SessionDetailPage />} />
           <Route path="/incoming-requests" element={<IncomingRequestsPage />} />
+          <Route path="/incoming-requests/:id" element={<IncomingRequestsPage />} />
 
           <Route element={<ProtectedRoute adminOnly />}>
             <Route path="/audit-log" element={<AuditLogPage />} />

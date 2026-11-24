@@ -60,6 +60,9 @@ func (w *Worker) processNext(claimCtx, attemptCtx context.Context) (bool, error)
 	if err != nil || item == nil {
 		return false, err
 	}
+	if item.Cancelled {
+		return true, nil
+	}
 	req := botclient.SendMessageRequest{
 		RecipientTelegramID: item.RecipientTelegramID, SessionID: item.SessionID, ContentType: item.ContentType,
 		FileID: item.FileID, Text: item.Content, SenderLabel: "Клиент:", Language: item.Language,

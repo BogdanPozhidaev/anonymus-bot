@@ -10,11 +10,29 @@ export async function listMessages(sessionId: number, limit: number, offset: num
   return response.data;
 }
 
-export async function sendAsParticipant(sessionId: number, role: 'client' | 'executor', text: string) {
+export interface OperatorReply {
+  recipientRole: 'client' | 'executor';
+  recipientUserId: number;
+  text: string;
+  requestKey: string;
+}
+
+export function createOperatorReplyKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function sendAsParticipant(sessionId: number, reply: OperatorReply) {
   await apiClient.post(`/sessions/${sessionId}/send-as`, {
-    impersonated_role: role,
+    impersonated_role: reply.recipientRole === 'client' ? 'executor' : 'client',
+    recipient_role: reply.recipientRole,
+    recipient_user_id: reply.recipientUserId,
+    request_key: reply.requestKey,
     content_type: 'text',
-    content: text,
+    content: reply.text,
   });
 }
 

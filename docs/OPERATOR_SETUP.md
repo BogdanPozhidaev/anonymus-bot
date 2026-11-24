@@ -6,12 +6,14 @@ Start backend and verify migration status using [MIGRATIONS.MD](MIGRATIONS.MD).
 Save a unique password on one line in a restricted UTF-8 file outside Git.
 Use at least 12 characters and at most 72 UTF-8 bytes excluding the
 newline. Control characters and entirely blank passwords are rejected.
-From the repository root:
+From the repository root, reuse the `$compose` arguments from the
+[deployment](DEPLOYMENT.md#start-an-isolated-http-stand) or
+[local development](README.md#local-development) guide:
 
 ```powershell
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
 Get-Content -Raw -Encoding UTF8 'C:/private/bootstrap-password.txt' |
-  docker compose -f infra/docker-compose.yml run --rm -T --no-deps migrate create-admin --login admin --name Administrator
+  docker compose @compose run --rm -T --no-deps migrate create-admin --login admin --name Administrator
 ```
 
 The CLI receives the password on stdin. The same login is a no-op on repeat
@@ -31,27 +33,24 @@ Remove the temporary password file when the credential is safely stored.
 
 Создай новую группу в Telegram, добавь туда бота (`@ваш_бот`).
 
-### Шаг 2 — узнай chat_id группы
+### Шаг 2 — узнайте идентификатор группы
 
-Напиши любое сообщение в группу, затем открой в браузере:
-\`\`\`
-https://api.telegram.org/bot<ВАШ_ТОКЕН>/getUpdates
-\`\`\`
+Получите `message.chat.id` из обновления для этой группы через защищённый
+инструмент администратора или изолированного тестового бота. Если
+используете [getUpdates](https://core.telegram.org/bots/api#getupdates),
+учтите, что он недоступен при активном webhook. Храните токен и ответ
+Telegram вне репозитория, истории браузера и общих журналов.
 
-Найди в JSON-ответе поле \`"chat":{"id":-100123456789,...}\` — это
-отрицательное число и есть chat_id группы.
+### Шаг 3 — укажите идентификатор в конфигурации
 
-### Шаг 3 — пропиши в конфиг
+В защищённом файле окружения выбранного Compose-проекта задайте
+`OPERATOR_GROUP_CHAT_ID` равным полученному числовому идентификатору.
+После этого пересоздайте контейнер бота с теми же аргументами `$compose`:
 
-В \`infra/.env\`:
-\`\`\`
-OPERATOR_GROUP_CHAT_ID=-100123456789
-\`\`\`
+```powershell
+docker compose @compose up -d --build bot
+```
 
-Перезапусти бота:
-\`\`\`powershell
-docker compose up --build bot
-\`\`\`
 
 ## Привязка аккаунта для команды /operator
 

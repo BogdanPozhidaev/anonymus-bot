@@ -1,118 +1,146 @@
-# Обзор API
+# API reference
 
-Backend предоставляет два семейства эндпоинтов:
+[Русская версия](API.ru.md)
 
-- `/internal/*` — сервисный API бэкенда. Каждый запрос бота содержит один
-  заголовок `X-Internal-Token`. Отсутствующий, повторный или неверный заголовок
-  даёт `401` до вызова обработчика. Настройка файла токена описана в
-  [ENV_VARS.md](ENV_VARS.md).
-- `/api/*` — API веб-панели. Защищённые маршруты принимают Bearer-токен
-  сессии. Точки входа, проверки готовности и восстановления описаны ниже.
+## Access
 
-Базовый Compose не публикует порт бэкенда. Nginx не проксирует
-`/api/internal` и его подмаршруты. Dev override публикует порт бэкенда
-только на `127.0.0.1:8080`. Для Swagger и k6 используйте локальное тестовое
-окружение. Для k6 укажите loopback-адрес явно через `BASE_URL` и путь к
-тестовому токену через `INTERNAL_API_TOKEN_FILE`. Изолированный запуск описан
-в [Operations](OPERATIONS.md#isolated-k6-relay-check).
+- `/api/*` is the operator panel API. Protected routes require
+  `Authorization: Bearer <operator-session-token>`.
+- `/internal/*` is the bot-facing API. Send exactly one
+  `X-Internal-Token` header. Missing, duplicate, or invalid headers
+  return HTTP 401. See [environment configuration](ENV_VARS.md).
 
-## Аутентификация
+The base Compose configuration keeps the backend port private. Nginx blocks
+internal routes, and the development override publishes the backend on loopback
+port 8080. Run Swagger and [k6](OPERATIONS.md#isolated-k6-relay-check) on an
+isolated test instance.
 
-| Метод | Путь | Описание |
-|---|---|---|
-| POST | `/api/auth/login` | Логин/пароль → totp_required или totp_setup_required |
-| POST | `/api/auth/totp/verify` | Подтверждение TOTP-кода → session_token |
-| POST | `/api/auth/logout` | Отзыв текущей сессии |
+## Authentication
 
-За 5 минут разрешено до 5 попыток входа на пару логин/IP и до 30
-попыток на IP. Для TOTP разрешено до 5 проверок на промежуточный токен
-в пределах его срока действия и до 10 проверок на оператора за 5 минут.
-При превышении лимита API возвращает `429` и `Retry-After` в секундах.
-При недоступном ограничителе Redis запрос получает `503`.
-Неверный пароль, неизвестный логин и неактивный аккаунт получают
-одинаковый `401` на этапе ввода пароля.
-После изменения роли или статуса прежние сессии и промежуточные токены
-оператора перестают действовать. Повторное включение оператора их не восстанавливает.
+| Method | Path | Result |
+| --- | --- | --- |
+| POST | `/api/auth/login` | Valid credentials return `totp_required` or `totp_setup_required`. |
+| POST | `/api/auth/totp/verify` | Verifies a TOTP code and returns `session_token`. |
+| POST | `/api/auth/logout` | Revokes the current session. |
+
+Within five minutes, login allows five attempts per login and IP pair and
+30 per IP. TOTP allows five checks per pending token during its lifetime
+and ten per operator per five minutes. Exceeding a limit returns HTTP 429
+with `Retry-After` in seconds. An unavailable rate limiter returns HTTP 503.
+An invalid password, unknown login, or inactive account returns HTTP 401
+at the password step. Role or status changes invalidate the affected
+operator's sessions and pending sign-ins.
 
 ### Optional operator sign-in with OpenID Connect
 
-| Method | Path | Response |
-|---|---|---|
-| GET | `/api/auth/oidc` | `{"enabled":true}` or `{"enabled":false}` according to backend configuration. |
-| POST | `/api/auth/oidc/start` | Provider `authorization_url` and a short-lived browser cookie. |
-| GET | `/api/auth/oidc/callback` | Verifies the provider response and redirects to the panel login with a completion flag. |
-| POST | `/api/auth/oidc/complete` | Consumes the one-time handoff cookie and returns `totp_required` with a `pending_token`. |
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/auth/oidc` | Reports whether SSO is enabled. |
+| POST | `/api/auth/oidc/start` | Returns `authorization_url` and sets a short-lived browser cookie. |
+| GET | `/api/auth/oidc/callback` | Verifies the provider response and redirects to the panel. |
+| POST | `/api/auth/oidc/complete` | Consumes the handoff cookie and returns `totp_required` with a `pending_token`. |
 
-The start, callback and complete routes are registered when SSO is enabled.
-The browser uses HTTPS on a single panel origin. Complete returns `401`
-for an invalid, expired or already consumed handoff. Finish the second
-factor with the existing TOTP endpoints.
-[Operator SSO operations](OPERATIONS.md#operator-sso-with-openid-connect)
+The last three routes require SSO to be enabled. Use a single HTTPS origin.
+An invalid, expired, or consumed handoff returns HTTP 401. Complete TOTP
+using the standard verification route. See [operator SSO operations](OPERATIONS.md#operator-sso-with-openid-connect).
 
-## Готовность сервиса
+## Readiness
 
-`GET /api/health` доступен через Nginx. При доступных PostgreSQL и Redis
-возвращает `200` и `status: ok`. При недоступной зависимости возвращает
-`503` с именем и состоянием зависимости без деталей подключения.
-`GET /health` остаётся доступен напрямую на бэкенде для существующих проверок.
+`GET /api/health` is available through Nginx. It returns HTTP 200 with
+`"status": "ok"` when PostgreSQL and Redis are ready, or HTTP 503 with
+dependency statuses when either is unavailable. `GET /health` is also
+available directly on the backend.
 
-## Сессии
+```http
+GET /api/health HTTP/1.1
+Host: panel.example.invalid
+```
 
-| Метод | Путь | Доступ |
-|---|---|---|
-| GET | `/api/sessions` | Все авторизованные (admin видит всё, operator — свои) |
-| GET | `/api/sessions/:id` | Владелец сессии или admin |
-| POST | `/api/sessions` | Все авторизованные |
-| POST | `/api/sessions/:id/invites` | Владелец сессии или admin. Принимает `role`, возвращает `token` и `expires_at` при выдаче |
-| DELETE | `/api/sessions/:id/invites/:role` | Владелец сессии или admin. Отзывает неиспользованное приглашение |
-| PATCH | `/api/sessions/:id/status` | Владелец сессии или admin |
-| PATCH | `/api/sessions/:id/owner` | Владелец сессии или admin |
-| GET | `/api/sessions/:id/messages` | Владелец сессии или admin |
-| POST | `/api/sessions/:id/send-as` | Владелец сессии или admin (режим active) |
+## Sessions
 
-### Приглашения
+An administrator can access all sessions. Other operators can access
+their assigned sessions.
 
-Новая ссылка действует 24 часа и используется один раз. Перевыпуск отзывает
-предыдущую ссылку на ту же роль. Выпустить и принять приглашение можно для
-свободного места в активной сессии. Ссылку следует передавать получателю лично.
-Бот принимает токен в личном чате и посылает его в теле
-`POST /internal/sessions/bind` вместе с данными пользователя. Старые ссылки
-с ID и ролью заменяются новыми. Уже подключённые участники могут открыть
-сессию через `/sessions`.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/sessions` | List accessible sessions. |
+| POST | `/api/sessions` | Create a session. |
+| GET | `/api/sessions/:id` | Read session details. |
+| POST | `/api/sessions/:id/invites` | Issue an invitation for `role` (`client` or `executor`). HTTP 201 includes `token` and `expires_at`. |
+| DELETE | `/api/sessions/:id/invites/:role` | Revoke an unused invitation. |
+| PATCH | `/api/sessions/:id/status` | Change session status. |
+| PATCH | `/api/sessions/:id/owner` | Assign a session owner. |
+| GET | `/api/sessions/:id/messages` | List retained messages. |
+| POST | `/api/sessions/:id/send-as` | Send on behalf of a participant in an active session. |
+| GET | `/api/messages/:id/media` | Read attached media after a session access check. Supports HTTP range requests. |
+| GET | `/api/sessions/:id/transcript` | Download an audited CSV or PDF export. |
 
-## Операторы (только admin)
+An invitation is single-use and expires after 24 hours. Reissuing it
+revokes the previous invitation for that role. Issue and redeem invitations
+for vacant participant slots in active sessions. Share the link privately.
+The bot redeems the token via `POST /internal/sessions/bind`. Previously
+bound participants can select a session with `/sessions`.
 
-| Метод | Путь |
-|---|---|
-| GET | `/api/operators` |
-| POST | `/api/operators` |
-| PATCH | `/api/operators/:id` |
+For operator replies, send `recipient_role`, the expected
+`recipient_user_id` from the session, and a nonzero UUID `request_key`
+along with `impersonated_role`, `content_type`, and `content`. Recipient
+and impersonated roles are opposite. Retry an unchanged command with
+the same key. The key is scoped to the operator and retained with its
+outbox entry. A successful retry returns the original message ID. A
+different payload with the same key, a changed recipient, or an
+inactive session returns HTTP 409. Revoked access returns HTTP 403 or
+401 according to session validity.
 
-`PATCH /api/operators/:id` accepts the `admin` and `operator` roles.
-A role change invalidates the affected operator's existing authentication.
-The API returns HTTP 409 if a role or status change would leave no active
-administrator.
+The explicit response contains `message_id` and `sender_label`.
+Legacy requests without the three new fields retain their request
+and response shape. Their recipient is fixed at enqueue time.
 
-## Входящие обращения
+## Operators and incoming requests
 
-| Метод | Путь |
-|---|---|
-| GET | `/api/incoming-requests` |
-| PATCH | `/api/incoming-requests/:id/status` |
+| Method | Path | Required access |
+| --- | --- | --- |
+| GET | `/api/operators` | Administrator |
+| POST | `/api/operators` | Administrator |
+| PATCH | `/api/operators/:id` | Administrator |
+| GET | `/api/incoming-requests` | Operator session |
+| GET | `/api/incoming-requests/:id` | Operator session. Assigned requests require their owner or an administrator. |
+| POST | `/api/incoming-requests/:id/claim` | Operator session. Claims a new request and returns HTTP 204. |
+| POST | `/api/incoming-requests/:id/session` | Request owner or administrator. Creates or opens the linked session. |
+| POST | `/api/incoming-requests/:id/transfer` | Administrator. Transfers an assigned request and its linked session. |
+| PATCH | `/api/incoming-requests/:id/status` | Operator session |
 
-## Аудит
+Use `status=in_progress` to list your own assigned requests. Claiming
+your own request again succeeds, while a competing claim returns HTTP 409.
+Session creation takes `title` and optional `language`. It returns HTTP 201
+with `id` on creation or HTTP 200 with the same `id` on repeat if the
+caller can access the session. Assignment, linking and their corresponding
+audit records are transactional. The legacy status operation rejects changes
+to assigned requests with HTTP 409. A linked session still uses the
+existing session access rules.
 
-Доступен только администраторам. Записи возвращают `actor_type`.
-CSV содержит выбранную страницу с теми же фильтрами.
+Administrators can add `scope=all` to `status=in_progress` to list
+every assigned request. Transfer accepts `expected_owner_id` and
+`operator_id`. A successful transfer or a retry to the same current
+owner returns HTTP 204. A stale owner, inactive target, or mismatch
+between the request and linked session owners returns HTTP 409. Both
+ownership changes and their audit event commit together.
 
-| Метод | Путь | Параметры запроса |
-|---|---|---|
-| GET | `/api/audit-log` | `actor_id`, `action`, `target_type`, `date_from`, `date_to`, `format` (json\|csv), `limit` (1–200, по умолчанию 100), `offset` (по умолчанию 0). JSON возвращает `has_more`. Даты принимаются в ISO `YYYY-MM-DD` или RFC 3339. |
+Operator roles are `admin` and `operator`. A change that would leave no
+active administrator returns HTTP 409.
 
-## Полная автогенерируемая документация
+## Audit log
 
-Для локальной разработки Swagger UI можно включить переменной
-`ENABLE_SWAGGER=true` и открыть `/swagger/index.html`. По умолчанию он отключён.
+`GET /api/audit-log` requires an administrator. Filters are `actor_id`,
+`action`, `target_type`, `date_from`, and `date_to`. Dates accept
+`YYYY-MM-DD` or RFC 3339. `limit` accepts 1–200 and defaults to 100.
+`offset` defaults to 0. JSON contains `actor_type` and `has_more`.
+With `format=csv`, the response exports the selected page.
+
+## OpenAPI
+
+Set `ENABLE_SWAGGER=true` on a development instance to access
+`/swagger/index.html`. Swagger is disabled by default.
+
 ## Message delivery
 
 `GET /api/sessions/:id/messages` returns `delivered` and
@@ -130,6 +158,14 @@ is active. After a transport or Telegram error, the worker retries at
 `failed`. For participant messages, a separate retryable notice is sent
 privately to the sender. Messages sent on behalf of a participant by an
 operator report the failure in the panel.
+
+When an operator reply becomes ineligible before the worker claims it,
+history reports `failed`. This includes replacement of the recipient,
+session closure, and revocation of the operator's applicable access.
+Queued operator replies from before the migration have no saved
+recipient and fail on claim. A pause delays delivery while the recipient
+and operator access remain valid. A network call already in progress
+cannot be cancelled retroactively.
 
 Successful Telegram API acceptance is the delivery confirmation. It
 does not report whether the recipient read the message. Workers lease
@@ -182,7 +218,8 @@ rows per page.
 An internal incoming-request submission reuses an open request for the
 same sender or a request created within the past ten minutes. A new
 record returns HTTP 201 and sends an operator alert. A reused record
-returns HTTP 200 with the existing ID. The first private text sent to
+returns HTTP 200. Both responses include the request `id` and its current
+`status` (`new`, `in_progress`, or `processed`). The first private text sent to
 the bot without a selected session fills the open request's empty
 first-message field. Later text leaves that field intact.
 

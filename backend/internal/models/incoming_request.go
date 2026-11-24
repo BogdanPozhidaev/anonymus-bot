@@ -10,10 +10,13 @@ type IncomingRequest struct {
 	FirstMessageText *string   `db:"first_message_text" json:"first_message_text"`
 	LanguageCode     *string   `db:"language_code" json:"language_code"`
 	Status           string    `db:"status" json:"status"`
+	OwnerOperatorID  *int64    `db:"owner_operator_id" json:"owner_operator_id"`
+	SessionID        *int64    `db:"session_id" json:"session_id"`
 	CreatedAt        time.Time `db:"created_at" json:"created_at"`
 }
 
 const (
-	IncomingRequestStatusNew       = "new"
-	IncomingRequestStatusProcessed = "processed"
+	IncomingRequestStatusNew        = "new"
+	IncomingRequestStatusInProgress = "in_progress"
+	IncomingRequestStatusProcessed  = "processed"
 )

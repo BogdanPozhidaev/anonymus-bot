@@ -96,7 +96,8 @@ func TestHandlerCommandsAndCallbacks(t *testing.T) {
 		case r.URL.Path == "/internal/incoming-requests" && r.Method == http.MethodPost:
 			_, _ = fmt.Fprint(w, `{"id":1}`)
 		case strings.HasSuffix(r.URL.Path, "/mark-processed"):
-			w.WriteHeader(http.StatusNoContent)
+			t.Error("alert callback must not change incoming request status")
+			w.WriteHeader(http.StatusConflict)
 		case strings.HasSuffix(r.URL.Path, "/sessions"):
 			if r.URL.Query().Get("limit") != "10" {
 				t.Error("session request did not set a page size")
@@ -151,16 +152,18 @@ func TestHandlerCommandsAndCallbacks(t *testing.T) {
 	operator.HandleMenuCallback(ctx, c)
 	f.expect(t)
 	f.expect(t, "Fixture sender", "Fixture body")
-	alerts := NewAlertCallbackHandler(f.bot, f.backend, "https://panel.example.invalid/", f.logger)
+	alerts := NewAlertCallbackHandler(f.bot, "https://panel.example.invalid/", f.logger)
 	c.Data = "open_session:3"
-	alerts.Handle(ctx, c)
+	alerts.Handle(c)
 	f.expect(t, "https://panel.example.invalid/sessions/3")
 	c.Data = "take_request:1"
-	alerts.Handle(ctx, c)
-	f.expect(t, "Взято в работу")
-	f.expect(t, "Взято в работу")
+	alerts.Handle(c)
+	f.expect(t, "https://panel.example.invalid/incoming-requests/1")
+	c.Data = "open_request:2"
+	alerts.Handle(c)
+	f.expect(t, "https://panel.example.invalid/incoming-requests/2")
 	c.Data = "close_session:3"
-	alerts.Handle(ctx, c)
+	alerts.Handle(c)
 	f.expect(t, "https://panel.example.invalid/sessions/3")
 	NewStopHandler(f.bot, f.backend, f.logger).Handle(ctx, m)
 	f.expect(t)

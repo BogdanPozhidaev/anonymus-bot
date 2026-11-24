@@ -10,7 +10,8 @@ export function ProtectedRoute({ adminOnly }: ProtectedRouteProps) {
   const { pathname } = useLocation();
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    const returnTo = /^\/incoming-requests\/\d+$/.test(pathname) ? pathname : undefined;
+    return <Navigate to="/login" replace state={{ returnTo }} />;
   }
 
   if (passwordChangeRequired && pathname !== '/account/password') {

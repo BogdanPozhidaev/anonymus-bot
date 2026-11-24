@@ -50,5 +50,5 @@ The isolated drill created two PostgreSQL Compose projects, migrated the
 source to schema version 7, and seeded a session and one fixture for each
 media volume. After restoration, the target returned the same migration
 state, session title and file bytes. A second restore into that target and
-a restore with a modified archive both failed as expected. The
-[development log](../../docs/DEVELOPMENT_LOG.md) records the verification.
+a restore with a modified archive both failed as expected. Repeat the
+drill with the schema and build being delivered.

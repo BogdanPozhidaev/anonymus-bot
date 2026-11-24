@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -23,6 +24,9 @@ func NewStartHandler(bot *tgbotapi.BotAPI, backend *backendclient.Client, logger
 }
 
 func (h *StartHandler) Handle(ctx context.Context, message *tgbotapi.Message) {
+	if message.Chat == nil {
+		return
+	}
 	payload := message.CommandArguments()
 
 	if payload == "" {
@@ -49,7 +53,9 @@ func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.
 			h.sendMessage(message.Chat.ID, unavailable)
 		} else {
 			h.logger.Error("failed to redeem session invitation")
-			h.sendNeutralGreeting(message.Chat.ID, message.From)
+			h.sendMessage(message.Chat.ID, tr(message.From,
+				"Не удалось проверить приглашение. Попробуйте открыть ту же ссылку позже.",
+				"We couldn't check the invitation. Try opening the same link again later."))
 		}
 		return
 	}
@@ -58,6 +64,17 @@ func (h *StartHandler) handleWithPayload(ctx context.Context, message *tgbotapi.
 		"session_id", resp.SessionID,
 		"role", resp.SessionType,
 	)
+
+	if resp.SessionType == "executor" {
+		text := tr(message.From, "Вы подключены как исполнитель.", "You joined as the executor.")
+		if resp.RequestText != "" {
+			text += "\n\n" + tr(message.From, "Текст обращения:", "Request details:") + "\n" + resp.RequestText
+		} else {
+			text += "\n\n" + tr(message.From, "Текст обращения пока недоступен.", "Request details are currently unavailable.")
+		}
+		h.sendMessage(message.Chat.ID, text)
+		return
+	}
 
 	ru := "Здравствуйте! Вы подключены к сессии в компании «" + h.organizationName() + "». Ваши сообщения будут переданы менеджеру."
 	en := "Hello! You have joined the session. Your messages will be sent to the manager."
@@ -80,21 +97,41 @@ func (h *StartHandler) handleWithoutPayload(ctx context.Context, message *tgbota
 		LanguageCode: message.From.LanguageCode,
 	}
 
-	if _, err := h.backend.CreateIncomingRequest(ctx, req); err != nil {
-		h.logger.Error("failed to create incoming request", "error", err)
+	response, err := h.backend.CreateIncomingRequest(ctx, req)
+	if err != nil || response.ID <= 0 {
+		h.logger.Error("failed to confirm incoming request")
+		h.sendMessage(message.Chat.ID, tr(message.From,
+			"Не удалось подтвердить приём обращения. Отправьте /start ещё раз через минуту.",
+			"We couldn't confirm your request. Send /start again in a minute."))
+		return
 	}
 
-	h.sendNeutralGreeting(message.Chat.ID, message.From)
+	h.sendRequestStatus(message.Chat.ID, message.From, response)
 }
 
-func (h *StartHandler) sendNeutralGreeting(chatID int64, user *tgbotapi.User) {
-	ru := "Спасибо за обращение в компанию «" + h.organizationName() + "». Ваш запрос принят, менеджер свяжется с вами."
-	en := "Thank you for contacting us. A manager will get back to you."
-	if h.branding.OrganizationName != "" {
-		en = "Thank you for contacting " + h.branding.OrganizationName + ". A manager will get back to you."
+func (h *StartHandler) sendRequestStatus(chatID int64, user *tgbotapi.User, response *backendclient.CreateIncomingRequestResponse) {
+	switch response.Status {
+	case "in_progress":
+		h.sendMessage(chatID, fmt.Sprintf(tr(user,
+			"Обращение №%d в работе. Если оператор пришлёт ссылку-приглашение, откройте её для подключения.",
+			"Request #%d is in progress. If the operator sends an invitation link, open it to join."), response.ID))
+		return
+	case "processed":
+		h.sendMessage(chatID, fmt.Sprintf(tr(user,
+			"Обращение №%d уже обработано. Если вопрос остался, попробуйте /start через 10 минут.",
+			"Request #%d has already been handled. If you still need help, try /start again in 10 minutes."), response.ID))
+		return
 	}
-	text := tr(user, brandedText(h.branding.RequestReceivedRU, ru), brandedText(h.branding.RequestReceivedEN, en))
-	h.sendMessage(chatID, text)
+	ru := "Спасибо за обращение в компанию «" + h.organizationName() + "»."
+	en := "Thank you for contacting us."
+	if h.branding.OrganizationName != "" {
+		en = "Thank you for contacting " + h.branding.OrganizationName + "."
+	}
+	greeting := tr(user, brandedText(h.branding.RequestReceivedRU, ru), brandedText(h.branding.RequestReceivedEN, en))
+	status := fmt.Sprintf(tr(user,
+		"Обращение №%d принято. Опишите вопрос одним сообщением, если ещё не сделали этого.",
+		"Request #%d was received. Describe your question in one message if you haven't already."), response.ID)
+	h.sendMessage(chatID, greeting+"\n\n"+status)
 }
 
 func (h *StartHandler) organizationName() string {

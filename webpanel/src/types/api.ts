@@ -80,6 +80,8 @@ export interface IncomingRequest {
   first_name: string | null;
   first_message_text: string | null;
   language_code: string | null;
-  status: 'new' | 'processed';
+  status: 'new' | 'in_progress' | 'processed';
+  owner_operator_id: number | null;
+  session_id: number | null;
   created_at: string;
 }

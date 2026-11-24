@@ -21,6 +21,10 @@ func NewSessionRepository(pool *pgxpool.Pool) *SessionRepository {
 }
 
 func (r *SessionRepository) Create(ctx context.Context, s *models.Session) error {
+	return insertSession(ctx, r.pool.QueryRow, s)
+}
+
+func insertSession(ctx context.Context, queryRow func(context.Context, string, ...any) pgx.Row, s *models.Session) error {
 	query := `
 		INSERT INTO sessions (
 			title, user_visible_name, client_user_id, executor_user_id,
@@ -31,7 +35,7 @@ func (r *SessionRepository) Create(ctx context.Context, s *models.Session) error
 		RETURNING id, created_at
 	`
 
-	err := r.pool.QueryRow(ctx, query,
+	err := queryRow(ctx, query,
 		s.Title,
 		s.UserVisibleName,
 		s.ClientUserID,

@@ -768,6 +768,75 @@ Use this file as an append-only record of verified work. Add date, task/issue ID
   and sign-in through the deployment's real IdP remain unverified. This
   work used synthetic data and isolated services.
 
+## 2026-11-24 — Incoming request ownership and session linking
+
+- Added schema version 12 and panel operations for claiming a request and
+  creating or reopening its linked session. Assignment and session linking
+  write audit events in the same transactions.
+- The panel now has an assigned queue and request details. Telegram alerts
+  link to the panel, and legacy callbacks leave the request status unchanged.
+- Verified assignment races, idempotent creation, transaction rollback,
+  pending request reuse, retention, and migration 11 to 12 on disposable
+  PostgreSQL and Redis. The migration round trip passed.
+- Backend race and CI coverage checks passed. API 77.3%, auth 86.2%,
+  moderation 100%, service 89.1%. Bot handler coverage was 78.6% with
+  the CI race flags. Frontend lint, type checking, build and all 18
+  Chromium scenarios passed with a mocked API.
+- The working deployment and live Telegram accounts were outside these
+  checks.
+
+## 2026-11-24 — Explicit operator reply targets
+
+- The session composer identifies the recipient and sending role and
+  resets its draft when the session or its participants change.
+  Repeating the same command reuses its request key.
+- Schema 13 stores the recipient and operator authorization version in
+  the outbox. Invalidated and previously queued unaddressed operator
+  messages fail without sending. The legacy request shape is supported.
+- The backend race suite, migration round trip, and coverage gates
+  passed with disposable dependencies. API coverage increased from
+  77.3% to 77.7%. Auth remained 86.2%, moderation 100%, service 89.1%.
+- Frontend lint, type checking, build and all 19 Chromium scenarios
+  passed with a mocked API. The working deployment was left running
+  on its existing version. Live Telegram delivery was outside the tests.
+
+## 2026-11-24 — Request and invitation feedback
+
+- The internal request response includes the current status. The bot
+  confirms only acknowledged requests, shows the reference and next
+  action, and distinguishes expired invitations from lookup failures.
+- The operator panel announces claim results and refreshes the request
+  after a session creation timeout. A known session is available from
+  the card even when its creation response was lost.
+- Bot race and coverage checks passed. Handler coverage reached 80.0%
+  (431/539). Frontend lint, type checking, build and all 20 Chromium
+  scenarios passed with a mocked API. The request scenario covered
+  keyboard activation, focus and timeout recovery.
+- Backend race tests, CI coverage checks and vet passed. Coverage stayed
+  at API 77.7%, auth 86.2%, moderation 100%, service 89.1%.
+- The working deployment and live Telegram accounts were outside the
+  verification. This change did not add a database migration.
+
+## 2026-11-24 — Administrator transfer and isolated pilot
+
+- Administrators can list assigned requests and transfer an assigned
+  request with its linked session. The transaction verifies current
+  ownership and permissions and records the ownership change in audit.
+- The backend race suite, CI coverage checks and vet passed. Coverage
+  reached API 77.8%, auth 86.2%, moderation 100%, service 89.1%. The
+  panel passed lint, type checking, build and 21 Chromium scenarios.
+- A separate Compose installation with clean volumes reached HTTP 200
+  on the panel and readiness endpoint. Schema version 13 was clean.
+  Synthetic operator sign-in, required password change, request transfer,
+  participant invitations and one delivery to a local fake bot passed.
+- The backup script restored PostgreSQL and both media volumes into a
+  second project. The restored schema, assignment, delivered reply,
+  fixture media bytes and runtime database grants were verified.
+  The panel and readiness endpoint returned HTTP 200 on the restored
+  data. Both isolated projects were stopped with volumes preserved.
+- The working deployment and real Telegram accounts were outside the
+  pilot checks. No migration was added for the transfer operation.
+
 ## Entry template
 ### YYYY-MM-DD — [ID] Short title
 - **Status:** planned / in progress / completed / blocked

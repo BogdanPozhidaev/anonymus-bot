@@ -30,6 +30,15 @@ func NewIncomingRequestRepository(pool *pgxpool.Pool) *IncomingRequestRepository
 	return &IncomingRequestRepository{pool: pool}
 }
 
+func (r *IncomingRequestRepository) FirstMessageForSession(ctx context.Context, sessionID int64) (string, error) {
+	var text string
+	err := r.pool.QueryRow(ctx, "SELECT COALESCE(first_message_text, '') FROM incoming_requests WHERE session_id=$1", sessionID).Scan(&text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return text, err
+}
+
 func (r *IncomingRequestRepository) Create(ctx context.Context, ir *models.IncomingRequest) error {
 	return insertIncomingRequest(ctx, r.pool.QueryRow, ir)
 }
@@ -69,8 +78,8 @@ func (r *IncomingRequestRepository) CreateOrReuse(ctx context.Context, ir *model
 		var status string
 		err := tx.QueryRow(ctx, `
 			SELECT id, status FROM incoming_requests
-			WHERE telegram_id=$1 AND (status='new' OR created_at > now() - interval '10 minutes')
-			ORDER BY (status='new') DESC, created_at DESC, id DESC LIMIT 1 FOR UPDATE
+			WHERE telegram_id=$1 AND (status IN ('new', 'in_progress') OR created_at > now() - interval '10 minutes')
+			ORDER BY (status IN ('new', 'in_progress')) DESC, created_at DESC, id DESC LIMIT 1 FOR UPDATE
 		`, ir.TelegramID).Scan(&ir.ID, &status)
 		if errors.Is(err, pgx.ErrNoRows) {
 			created = true
@@ -79,7 +88,8 @@ func (r *IncomingRequestRepository) CreateOrReuse(ctx context.Context, ir *model
 		if err != nil {
 			return err
 		}
-		if status == models.IncomingRequestStatusNew && ir.FirstMessageText != nil {
+		ir.Status = status
+		if status != models.IncomingRequestStatusProcessed && ir.FirstMessageText != nil {
 			_, err = tx.Exec(ctx, `UPDATE incoming_requests SET first_message_text=$2 WHERE id=$1 AND first_message_text IS NULL`, ir.ID, ir.FirstMessageText)
 		}
 		return err
@@ -89,7 +99,8 @@ func (r *IncomingRequestRepository) CreateOrReuse(ctx context.Context, ir *model
 
 func (r *IncomingRequestRepository) GetByID(ctx context.Context, id int64) (*models.IncomingRequest, error) {
 	query := `
-		SELECT id, telegram_id, username, first_name, first_message_text, language_code, status, created_at
+		SELECT id, telegram_id, username, first_name, first_message_text, language_code, status, created_at,
+		    owner_operator_id, session_id
 		FROM incoming_requests
 		WHERE id = $1
 	`
@@ -104,6 +115,8 @@ func (r *IncomingRequestRepository) GetByID(ctx context.Context, id int64) (*mod
 		&ir.LanguageCode,
 		&ir.Status,
 		&ir.CreatedAt,
+		&ir.OwnerOperatorID,
+		&ir.SessionID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -116,22 +129,27 @@ func (r *IncomingRequestRepository) GetByID(ctx context.Context, id int64) (*mod
 }
 
 func (r *IncomingRequestRepository) ListByStatus(ctx context.Context, status string) ([]*models.IncomingRequest, error) {
-	return r.listByStatus(ctx, status, nil, 0)
+	return r.listByStatus(ctx, status, nil, 0, nil)
 }
 
 func (r *IncomingRequestRepository) ListByStatusPage(ctx context.Context, status string, limit, offset int) ([]*models.IncomingRequest, error) {
-	return r.listByStatus(ctx, status, &limit, offset)
+	return r.listByStatus(ctx, status, &limit, offset, nil)
 }
 
-func (r *IncomingRequestRepository) listByStatus(ctx context.Context, status string, limit *int, offset int) ([]*models.IncomingRequest, error) {
+func (r *IncomingRequestRepository) ListAssignedPage(ctx context.Context, ownerID int64, limit, offset int) ([]*models.IncomingRequest, error) {
+	return r.listByStatus(ctx, models.IncomingRequestStatusInProgress, &limit, offset, &ownerID)
+}
+
+func (r *IncomingRequestRepository) listByStatus(ctx context.Context, status string, limit *int, offset int, ownerID *int64) ([]*models.IncomingRequest, error) {
 	query := `
-		SELECT id, telegram_id, username, first_name, first_message_text, language_code, status, created_at
+		SELECT id, telegram_id, username, first_name, first_message_text, language_code, status, created_at,
+		    owner_operator_id, session_id
 		FROM incoming_requests
-		WHERE status = $1
+		WHERE status = $1 AND ($4::bigint IS NULL OR owner_operator_id = $4)
 		ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3
 	`
 
-	rows, err := r.pool.Query(ctx, query, status, limit, offset)
+	rows, err := r.pool.Query(ctx, query, status, limit, offset, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list incoming requests: %w", err)
 	}
@@ -149,6 +167,8 @@ func (r *IncomingRequestRepository) listByStatus(ctx context.Context, status str
 			&ir.LanguageCode,
 			&ir.Status,
 			&ir.CreatedAt,
+			&ir.OwnerOperatorID,
+			&ir.SessionID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan incoming request row: %w", err)
@@ -164,7 +184,7 @@ func (r *IncomingRequestRepository) listByStatus(ctx context.Context, status str
 }
 
 func (r *IncomingRequestRepository) UpdateStatus(ctx context.Context, id int64, status string) error {
-	query := `UPDATE incoming_requests SET status = $1 WHERE id = $2`
+	query := `UPDATE incoming_requests SET status = $1 WHERE id = $2 AND status <> 'in_progress'`
 
 	cmdTag, err := r.pool.Exec(ctx, query, status, id)
 	if err != nil {
@@ -172,7 +192,10 @@ func (r *IncomingRequestRepository) UpdateStatus(ctx context.Context, id int64, 
 	}
 
 	if cmdTag.RowsAffected() == 0 {
-		return ErrNotFound
+		if _, err := r.GetByID(ctx, id); err != nil {
+			return err
+		}
+		return ErrIncomingRequestConflict
 	}
 
 	return nil
